@@ -64,7 +64,7 @@ Boot HART MEDELEG           : 0x0000000000f4b509
 framebuffer  ramfb 1280x800 stride 5120 cells 100x37
 
 ========================================
-   pagh OS ��� RISC-V (RV64)
+   pagh OS — RISC-V (RV64)
 ========================================
 boot hart   0
 device tree 0x8fe00000
@@ -79,29 +79,27 @@ task        16 slots, 16 KiB stack + 4 KiB guard, quantum 8 ticks, timer clock
 virtio-blk: virtio-blk0 at 0x10007000: 131072 sectors (64 MiB)
 virtio-input: tablet at 0x10008000, abs X 0..32767, Y 0..32767
 fs          virtio-blk0 (131072 sectors, 65536 KiB)
-fs          ext2 on /mnt, 4096 B blocks, 15333/16384 blocks free, 16368/16384 inodes free
+fs          ext2 on /mnt, 4096 B blocks, 15305/16384 blocks free, 16364/16384 inodes free
 virtio-net: no device
 net         no network device
 
 Type 'help' for the command list.
 
-pagh:rv64> run /mnt/hello
-hello from C on pagh-riscv
-argc=1 argv0=/mnt/hello pid=1
-run: /mnt/hello exited with code 0
-pagh:rv64> run /mnt/cat /mnt/hello.txt
-hello libc
-run: /mnt/cat exited with code 0
-pagh:rv64> run /mnt/ls /mnt
-lost+found/
-cat
-env
-hello
-hello.txt
-ls
-run: /mnt/ls exited with code 0
-pagh:rv64> run /mnt/env
-PWD=/
-run: /mnt/env exited with code 0
+pagh:rv64> run /mnt/threads
+worker 5 done
+worker 3 done
+counter=8 ret=50/30
+run: /mnt/threads exited with code 0
+pagh:rv64> run /mnt/signals
+hits=1
+run: /mnt/signals exited with code 0
+pagh:rv64> run /mnt/cwd
+cwd=/mnt
+relative read=hello libc
+run: /mnt/cwd exited with code 0
+pagh:rv64> run /mnt/fileio
+line one
+line two
+run: /mnt/fileio exited with code 0
 pagh:rv64> halt
 halt: powering off

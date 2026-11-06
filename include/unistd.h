@@ -5,7 +5,7 @@
 #include <pagh.h>
 long read(int fd, void *buf, size_t n);
 long write(int fd, const void *buf, size_t n);
-int open(const char *path, int flags, int mode);
+int open(const char *path, int flags, ...);
 int close(int fd);
 long lseek(int fd, long off, int whence);
 int unlink(const char *path);
@@ -21,5 +21,8 @@ int getpid(void);
 void _exit(int code) __attribute__((noreturn));
 void exit(int code) __attribute__((noreturn));
 long sysconf(int name);
+int chdir(const char *path);
+char *getcwd(char *buf, unsigned long size);
+#define ERANGE 34
 #define _SC_PAGESIZE 30
 #endif

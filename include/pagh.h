@@ -53,3 +53,39 @@ long __pagh_syscall6(long nr, long a0, long a1, long a2, long a3, long a4, long 
 long __pagh_syscall3(long nr, long a0, long a1, long a2);
 
 #endif
+
+/* Threads, futex, signals, memory. */
+#define SYS_CLONE 220
+#define SYS_FUTEX 98
+#define SYS_GETTID 178
+#define SYS_TGKILL 131
+#define SYS_KILL 129
+#define SYS_RT_SIGACTION 134
+#define SYS_RT_SIGPROCMASK 135
+#define SYS_RT_SIGRETURN 139
+#define SYS_MMAP 222
+#define SYS_MUNMAP 215
+#define CLONE_VM 0x100
+#define CLONE_FS 0x200
+#define CLONE_FILES 0x400
+#define CLONE_SIGHAND 0x800
+#define CLONE_THREAD 0x10000
+#define FUTEX_WAIT 0
+#define FUTEX_WAKE 1
+#define FUTEX_PRIVATE_FLAG 128
+#define SIG_DFL ((void (*)(int))0)
+#define SIG_IGN ((void (*)(int))1)
+#define SA_RESTORER 0x04000000
+#define SIG_BLOCK 0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+#define SIGUSR1 10
+#define SIGUSR2 12
+#define SIGTERM 15
+#define SIGKILL 9
+#define SIGINT 2
+#define MAP_PRIVATE 2
+#define MAP_ANONYMOUS 0x20
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define PROT_EXEC 4

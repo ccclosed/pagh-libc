@@ -43,10 +43,17 @@ run /mnt/hello
 | files | `open/read/write/close/lseek`, `stat/fstat`, `opendir/readdir/closedir` |
 | process | `getpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `clock_gettime`, `time`, `nanosleep` |
+| threads | `pthread_create/join/exit/self`, `pthread_attr_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
+| signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
+| cwd | `chdir/getcwd` process-local (the ABI has no chdir); relative `open/stat/...` resolve against it |
+| stdio | `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering |
 
 ## Honest limits
 
-No dynamic loader, no pthreads, no signals in libc wrappers yet, no `FILE`
-buffering for regular files (only stdout is line-unbuffered), no `chdir`
-(the ABI has no chdir), no `fork`/`exec` wrappers yet (raw syscalls exist),
-no `getenv`/`setenv` (the kernel passes only `PWD`; `environ` is built from it).
+No dynamic loader, no TLS, no `fork`/`exec` wrappers yet (raw syscalls exist),
+no `setenv`/`putenv` (environ is a read-only snapshot from the kernel frame),
+no locale, no wide chars, no `chdir` in the kernel (libc keeps a process-local
+cwd and rewrites relative paths), no per-thread malloc (the brk heap is shared
+and unsynchronized — document this for multithreaded C), no `FILE` locking,
+and `pthread_join` requires the thread to be created through this libc (a
+16-slot registry).

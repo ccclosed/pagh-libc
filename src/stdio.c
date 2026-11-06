@@ -87,14 +87,6 @@ int printf(const char *fmt, ...) {
     if (n > 0) write(1, buf, n < (int)sizeof buf ? (size_t)n : sizeof buf - 1);
     return n;
 }
-int fprintf(int fd, const char *fmt, ...) {
-    char buf[1024];
-    va_list ap; va_start(ap, fmt);
-    int n = vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
-    if (n > 0) write(fd, buf, n < (int)sizeof buf ? (size_t)n : sizeof buf - 1);
-    return n;
-}
 int snprintf(char *buf, size_t size, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     int n = vsnprintf(buf, size, fmt, ap);
@@ -102,6 +94,5 @@ int snprintf(char *buf, size_t size, const char *fmt, ...) {
     return n;
 }
 int puts(const char *s) { write(1, s, strlen(s)); write(1, "\n", 1); return 0; }
-int fputs(const char *s, int fd) { write(fd, s, strlen(s)); return 0; }
 int putchar(int c) { char ch = (char)c; write(1, &ch, 1); return c; }
 int getchar(void) { char c; return read(0, &c, 1) == 1 ? (unsigned char)c : -1; }

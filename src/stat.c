@@ -2,6 +2,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pagh_internal.h>
 
 int fstat(int fd, struct pagh_stat *st) {
     long r = __pagh_syscall3(SYS_FSTAT, fd, (long)st, 0);
@@ -9,7 +10,9 @@ int fstat(int fd, struct pagh_stat *st) {
     return 0;
 }
 int stat(const char *path, struct pagh_stat *st) {
-    int fd = open(path, O_RDONLY, 0);
+    char buf[512];
+    const char *abs = __pagh_abs(path, buf, sizeof buf);
+    int fd = open(abs, O_RDONLY, 0);
     if (fd < 0) return -1;
     int r = fstat(fd, st);
     int e = errno;
