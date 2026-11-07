@@ -81,6 +81,9 @@ the program's directory, resolves symbols across all of them, and protects every
 object's pages. Live: `hello_dyn.elf` needs `libextra.so` and `libpagh-c.so`;
 `run /mnt/ld-pagh /mnt/hello_dyn` prints `extra=42` and exits 0.
 
-Limits: constructor/`DT_INIT` arrays are **not run** yet (the loader calls
-`e_entry` directly), no symbol versioning, TLS, lazy binding or `dlopen`; a
-statically linked binary does not need the loader.
+The loader runs **`DT_INIT` and `DT_INIT_ARRAY` constructors** (dependency order
+first, executable last) before `e_entry`, so a shared library can initialise its
+own state. Live: libextra's constructor sets 7, `extra_answer()` returns 42.
+
+Limits: no symbol versioning, TLS, lazy binding or `dlopen`; a statically linked
+binary does not need the loader.

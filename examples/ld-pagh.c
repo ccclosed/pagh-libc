@@ -224,6 +224,21 @@ static int file_dir(const char *path, char *out, unsigned long size) {
     return 0;
 }
 
+
+#define DT_INIT 12
+#define DT_INIT_ARRAY 25
+#define DT_INIT_ARRAYSZ 27
+static void call_inits(struct object *o) {
+    unsigned long init = dyn_value(o, DT_INIT);
+    if (init) ((void (*)(void))((unsigned long)o->base + init))();
+    unsigned long arr = dyn_value(o, DT_INIT_ARRAY);
+    unsigned long sz = dyn_value(o, DT_INIT_ARRAYSZ);
+    if (arr && sz) {
+        void (**fns)(void) = (void (**)(void))((unsigned long)o->base + arr);
+        for (unsigned long i = 0; i < sz / sizeof(void *); i++) fns[i]();
+    }
+}
+
 int main(int argc, char **argv, char **envp) {
     if (argc < 2) { printf("usage: ld-pagh <program> [args...]\n"); return 2; }
     static struct object exe, deps[8];
@@ -259,6 +274,7 @@ int main(int argc, char **argv, char **envp) {
     int nobj = nneeded + 1;
     for (int i = 0; i < nobj; i++) if (relocate(objs[i], objs, nobj) < 0) return 1;
     for (int i = 0; i < nobj; i++) protect_object(objs[i]);
+    for (int i = nobj - 1; i >= 0; i--) call_inits(objs[i]);
     int (*entry)(int, char **, char **) = (int (*)(int, char **, char **))((unsigned long)exe.base + exe.eh->entry);
     return entry(argc - 1, argv + 1, envp);
 }
