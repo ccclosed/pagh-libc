@@ -41,9 +41,10 @@ run /mnt/hello
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup` |
 | stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar` |
 | files | `open/read/write/close/lseek`, `stat/fstat`, `opendir/readdir/closedir` |
+| env | `getenv/setenv/unsetenv` (mutable layer over the kernel frame) |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `clock_gettime`, `time`, `nanosleep` |
-| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
+| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
 | signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
 | cwd | `chdir/getcwd` process-local (the ABI has no chdir); relative `open/stat/...` resolve against it |
 | stdio | `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering |

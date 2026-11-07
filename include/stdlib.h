@@ -15,3 +15,5 @@ void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const voi
 extern char **environ;
 char *getenv(const char *name);
 #endif
+int setenv(const char *name, const char *value, int overwrite);
+int unsetenv(const char *name);

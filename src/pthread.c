@@ -104,3 +104,54 @@ int pthread_mutex_unlock(pthread_mutex_t *m) {
     futex(&m->locked, FUTEX_WAKE, 1);
     return 0;
 }
+
+/* ---- condition variables (futex sequence word) ------------------------ */
+int pthread_cond_init(pthread_cond_t *c, const void *attr) { (void)attr; if (!c) return -1; c->seq = 0; return 0; }
+int pthread_cond_destroy(pthread_cond_t *c) { (void)c; return 0; }
+int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
+    int seq = __atomic_load_n(&c->seq, __ATOMIC_ACQUIRE);
+    pthread_mutex_unlock(m);
+    futex(&c->seq, FUTEX_WAIT, seq);
+    pthread_mutex_lock(m);
+    return 0;
+}
+int pthread_cond_signal(pthread_cond_t *c) {
+    __atomic_add_fetch(&c->seq, 1, __ATOMIC_RELEASE);
+    futex(&c->seq, FUTEX_WAKE, 1);
+    return 0;
+}
+int pthread_cond_broadcast(pthread_cond_t *c) {
+    __atomic_add_fetch(&c->seq, 1, __ATOMIC_RELEASE);
+    futex(&c->seq, FUTEX_WAKE, 0x7fffffff);
+    return 0;
+}
+
+/* ---- rwlock (readers high, writer low bit) ---------------------------- */
+#define RW_WRITER 1
+int pthread_rwlock_init(pthread_rwlock_t *l, const void *attr) { (void)attr; l->state = 0; return 0; }
+int pthread_rwlock_rdlock(pthread_rwlock_t *l) {
+    for (;;) {
+        int s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+        if (!(s & RW_WRITER) &&
+            __atomic_compare_exchange_n(&l->state, &s, s + 2, 0,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+            return 0;
+        futex(&l->state, FUTEX_WAIT, s);
+    }
+}
+int pthread_rwlock_wrlock(pthread_rwlock_t *l) {
+    for (;;) {
+        int expected = 0;
+        if (__atomic_compare_exchange_n(&l->state, &expected, RW_WRITER, 0,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+            return 0;
+        futex(&l->state, FUTEX_WAIT, expected);
+    }
+}
+int pthread_rwlock_unlock(pthread_rwlock_t *l) {
+    int s = __atomic_load_n(&l->state, __ATOMIC_RELAXED);
+    if (s & RW_WRITER) __atomic_store_n(&l->state, 0, __ATOMIC_RELEASE);
+    else __atomic_sub_fetch(&l->state, 2, __ATOMIC_RELEASE);
+    futex(&l->state, FUTEX_WAKE, 0x7fffffff);
+    return 0;
+}
