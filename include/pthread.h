@@ -2,6 +2,13 @@
 #define PAGH_PTHREAD_H
 #include <stddef.h>
 typedef int pthread_t;
+typedef struct { int locked; } pthread_mutex_t;
+#define PTHREAD_MUTEX_INITIALIZER { 0 }
+int pthread_mutex_init(pthread_mutex_t *m, const void *attr);
+int pthread_mutex_destroy(pthread_mutex_t *m);
+int pthread_mutex_lock(pthread_mutex_t *m);
+int pthread_mutex_unlock(pthread_mutex_t *m);
+int pthread_mutex_trylock(pthread_mutex_t *m);
 typedef struct { int detachstate; size_t stacksize; } pthread_attr_t;
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                    void *(*start_routine)(void *), void *arg);

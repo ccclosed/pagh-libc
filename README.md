@@ -43,7 +43,7 @@ run /mnt/hello
 | files | `open/read/write/close/lseek`, `stat/fstat`, `opendir/readdir/closedir` |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `clock_gettime`, `time`, `nanosleep` |
-| threads | `pthread_create/join/exit/self`, `pthread_attr_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
+| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
 | signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
 | cwd | `chdir/getcwd` process-local (the ABI has no chdir); relative `open/stat/...` resolve against it |
 | stdio | `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering |

@@ -79,3 +79,28 @@ int pthread_attr_setstacksize(pthread_attr_t *attr, size_t size) {
     if (!attr) return -1; attr->stacksize = size; return 0;
 }
 int pthread_attr_destroy(pthread_attr_t *attr) { (void)attr; return 0; }
+
+/* ---- mutexes (futex-backed) ------------------------------------------- */
+int pthread_mutex_init(pthread_mutex_t *m, const void *attr) {
+    (void)attr; if (!m) return -1; m->locked = 0; return 0;
+}
+int pthread_mutex_destroy(pthread_mutex_t *m) { (void)m; return 0; }
+int pthread_mutex_trylock(pthread_mutex_t *m) {
+    int expected = 0;
+    return __atomic_compare_exchange_n(&m->locked, &expected, 1, 0,
+                                       __ATOMIC_ACQUIRE, __ATOMIC_RELAXED) ? 0 : 1;
+}
+int pthread_mutex_lock(pthread_mutex_t *m) {
+    for (;;) {
+        int expected = 0;
+        if (__atomic_compare_exchange_n(&m->locked, &expected, 1, 0,
+                                        __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+            return 0;
+        futex(&m->locked, FUTEX_WAIT, 1);
+    }
+}
+int pthread_mutex_unlock(pthread_mutex_t *m) {
+    __atomic_store_n(&m->locked, 0, __ATOMIC_RELEASE);
+    futex(&m->locked, FUTEX_WAKE, 1);
+    return 0;
+}
