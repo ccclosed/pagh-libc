@@ -57,3 +57,14 @@ cwd and rewrites relative paths), no per-thread malloc (the brk heap is shared
 and unsynchronized — document this for multithreaded C), no `FILE` locking,
 and `pthread_join` requires the thread to be created through this libc (a
 16-slot registry).
+
+
+## Dynamic linking (experimental)
+
+`build/libpagh-c.so` (ET_DYN, lld), `build/hello_dyn.elf` and the userland
+`examples/ld-pagh.c` loader are in the tree. The loader maps ET_DYN objects,
+applies `R_RISCV_RELATIVE`/`R_RISCV_64`/`R_RISCV_JUMP_SLOT`, resolves
+`DT_NEEDED` symbols and calls `e_entry`. **Status: experimental and currently
+faulting** during the loaded libc's relocation path (`store page fault` in
+`strdup` after mapping both objects); it is not claimed working yet. The stable
+path remains static linking (`build/*.elf`).
