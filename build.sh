@@ -29,9 +29,13 @@ $CC -march=rv64gc -mabi=lp64d -mcmodel=medany -ffreestanding -fno-stack-protecto
 PIC_OBJS="$PIC_OBJS build/pic_syscall.o"
 LLD="${LLD:-$(find /home/oleg/.rustup -name rust-lld -path '*nightly*' | head -1)}"
 $LLD -flavor gnu -shared -soname libpagh-c.so -o build/libpagh-c.so $PIC_OBJS
+# Second shared library for the multi-DT_NEEDED test.
+$CC $CFLAGS -fPIC -c examples/libextra.c -o build/libextra.o
+$LLD -flavor gnu -shared -soname libextra.so -o build/libextra.so build/libextra.o
 # Dynamically linked test executable (no crt0; entry main, loader passes args).
 $CC $CFLAGS -fPIC -c examples/hello_dyn.c -o build/hello_dyn.o
-$LLD -flavor gnu -pie -e main -o build/hello_dyn.elf build/hello_dyn.o build/libpagh-c.so
+$LLD -flavor gnu -pie -e main -o build/hello_dyn.elf build/hello_dyn.o \
+    build/libextra.so build/libpagh-c.so
 for ex in examples/*.c; do
     case "$ex" in
         examples/hello_dyn.c) continue ;;  # built as a shared-lib PIE below

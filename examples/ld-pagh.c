@@ -198,31 +198,67 @@ static void zero_bss(struct object *o) {
     }
 }
 
+
+#define DT_NULL 0
+#define DT_NEEDED 1
+#define DT_STRTAB 5
+
+static unsigned long dyn_value(struct object *o, unsigned long tag) {
+    for (int i = 0; i < o->eh->phnum; i++) {
+        struct phdr *p = (struct phdr *)(o->data + o->eh->phoff + (unsigned long)i * o->eh->phentsize);
+        if (p->type != PT_DYNAMIC) continue;
+        unsigned long *d = (unsigned long *)(o->base + p->vaddr);
+        for (unsigned long j = 0; j + 1 < p->memsz / 8; j += 2) {
+            if (d[j] == tag) return d[j + 1];
+            if (d[j] == DT_NULL) break;
+        }
+    }
+    return 0;
+}
+static int file_dir(const char *path, char *out, unsigned long size) {
+    const char *slash = strrchr(path, '/');
+    if (!slash) { strncpy(out, ".", size); return 0; }
+    unsigned long n = (unsigned long)(slash - path);
+    if (n >= size) return -1;
+    memcpy(out, path, n); out[n] = 0;
+    return 0;
+}
+
 int main(int argc, char **argv, char **envp) {
     if (argc < 2) { printf("usage: ld-pagh <program> [args...]\n"); return 2; }
-    static struct object exe, lib;
-    memset(&exe, 0, sizeof exe); memset(&lib, 0, sizeof lib);
+    static struct object exe, deps[8];
+    memset(&exe, 0, sizeof exe); memset(deps, 0, sizeof deps);
     if (read_file(&exe, argv[1]) < 0) { printf("ld-pagh: cannot read %s\n", argv[1]); return 1; }
     if (load_object(&exe) < 0) { printf("ld-pagh: cannot map %s\n", argv[1]); return 1; }
     zero_bss(&exe);
-    char libpath[256];
-    const char *slash = strrchr(argv[1], '/');
-    if (slash) {
-        unsigned long n = (unsigned long)(slash - argv[1]);
-        if (n > 200) n = 200;
-        memcpy(libpath, argv[1], n); libpath[n] = 0;
-        strcat(libpath, "/libpagh-c.so");
-    } else strcpy(libpath, "libpagh-c.so");
-    if (read_file(&lib, libpath) < 0) {
-        if (read_file(&lib, "/mnt/libpagh-c.so") < 0) { printf("ld-pagh: cannot read %s\n", libpath); return 1; }
+    char dir[256];
+    if (file_dir(argv[1], dir, sizeof dir) < 0) { printf("ld-pagh: path too long\n"); return 1; }
+    unsigned long strtab = dyn_value(&exe, DT_STRTAB);
+    unsigned long needed[8]; int nneeded = 0;
+    for (int i = 0; i < exe.eh->phnum; i++) {
+        struct phdr *p = (struct phdr *)(exe.data + exe.eh->phoff + (unsigned long)i * exe.eh->phentsize);
+        if (p->type != PT_DYNAMIC) continue;
+        unsigned long *d = (unsigned long *)(exe.base + p->vaddr);
+        for (unsigned long j = 0; j + 1 < p->memsz / 8; j += 2) {
+            if (d[j] == DT_NULL) break;
+            if (d[j] == DT_NEEDED && nneeded < 8) needed[nneeded++] = d[j + 1];
+        }
     }
-    if (load_object(&lib) < 0) { printf("ld-pagh: cannot map libc\n"); return 1; }
-    zero_bss(&lib);
-    struct object *objs[2] = { &exe, &lib };
-    if (relocate(&lib, objs, 2) < 0 || relocate(&exe, objs, 2) < 0) return 1;
-    protect_object(&lib);
-    protect_object(&exe);
+    if (!nneeded) { printf("ld-pagh: no DT_NEEDED\n"); return 1; }
+    for (int i = 0; i < nneeded; i++) {
+        const char *name = (const char *)(exe.base + strtab + needed[i]);
+        char path[512]; unsigned long dl = strlen(dir), nl = strlen(name);
+        if (dl + 1 + nl + 1 > sizeof path) { printf("ld-pagh: dependency path too long\n"); return 1; }
+        memcpy(path, dir, dl); path[dl] = '/'; memcpy(path + dl + 1, name, nl + 1);
+        if (read_file(&deps[i], path) < 0) { printf("ld-pagh: cannot read %s\n", path); return 1; }
+        if (load_object(&deps[i]) < 0) { printf("ld-pagh: cannot map %s\n", path); return 1; }
+        zero_bss(&deps[i]);
+    }
+    struct object *objs[9]; objs[0] = &exe;
+    for (int i = 0; i < nneeded; i++) objs[i + 1] = &deps[i];
+    int nobj = nneeded + 1;
+    for (int i = 0; i < nobj; i++) if (relocate(objs[i], objs, nobj) < 0) return 1;
+    for (int i = 0; i < nobj; i++) protect_object(objs[i]);
     int (*entry)(int, char **, char **) = (int (*)(int, char **, char **))((unsigned long)exe.base + exe.eh->entry);
-    int rc = entry(argc - 1, argv + 1, envp);
-    return rc;
+    return entry(argc - 1, argv + 1, envp);
 }

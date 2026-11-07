@@ -76,8 +76,11 @@ argc=1 argv0=/mnt/hello_dyn
 run: /mnt/ld-pagh exited with code 0
 ```
 
-Build inputs: `build/libpagh-c.so` (LLD `-shared`), `build/hello_dyn.elf`
-(PIE `-e main`, `DT_NEEDED libpagh-c.so`) and `build/ld-pagh.elf` (static).
-Limits: one `DT_NEEDED` library (the loader also accepts the same directory or
-`/mnt`), no symbol versioning, no TLS, no `init`/`fini` arrays, no lazy
-binding, no `dlopen`. A statically linked binary does not need the loader.
+The loader follows **multiple `DT_NEEDED`** entries (up to 8), loads each from
+the program's directory, resolves symbols across all of them, and protects every
+object's pages. Live: `hello_dyn.elf` needs `libextra.so` and `libpagh-c.so`;
+`run /mnt/ld-pagh /mnt/hello_dyn` prints `extra=42` and exits 0.
+
+Limits: constructor/`DT_INIT` arrays are **not run** yet (the loader calls
+`e_entry` directly), no symbol versioning, TLS, lazy binding or `dlopen`; a
+statically linked binary does not need the loader.
