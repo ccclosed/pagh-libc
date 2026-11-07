@@ -62,16 +62,15 @@ static int read_file(struct object *o, const char *path) {
     int fd = open(path, O_RDONLY, 0);
     if (fd < 0) return -1;
     struct pagh_stat st;
-    if (fstat(fd, &st) < 0 || st.size == 0 || st.size > (4UL << 20)) { fdprintf(2, "ld-pagh: fstat rc/size=%lu\n", st.size); close(fd); return -1; }
+    if (fstat(fd, &st) < 0 || st.size == 0 || st.size > (4UL << 20)) { close(fd); return -1; }
     unsigned char *buf = malloc((size_t)st.size);
     if (!buf) { close(fd); return -1; }
     long n = read(fd, buf, (size_t)st.size);
     close(fd);
-    if (n != (long)st.size) { fdprintf(2, "ld-pagh: read %ld of %lu\n", n, st.size); free(buf); return -1; }
+    if (n != (long)st.size) { free(buf); return -1; }
     o->path = path; o->data = buf; o->size = (unsigned long)st.size;
     o->eh = (struct ehdr *)buf;
     if (memcmp(o->eh->ident, "\177ELF", 4) || o->eh->machine != 243) {
-        fdprintf(2, "ld-pagh: bad ELF magic/machine machine=%u size=%lu\n", o->eh->machine, o->size);
         return -1;
     }
     o->sh = (struct shdr *)(buf + o->eh->shoff);
@@ -119,10 +118,8 @@ static int load_object(struct object *o) {
     }
     max = (max + 4095) & ~4095UL;
     o->total = max;
-    fdprintf(2, "ld-pagh: phnum=%u max=%lu\n", o->eh->phnum, max);
     long base = sys_mmap(max, PROT_READ | PROT_WRITE);
-    fdprintf(2, "ld-pagh: mmap base=%ld\n", base);
-    if (base < 0) { printf("ld-pagh: mmap %lu failed: %ld\n", max, base); return -1; }
+    if (base < 0) return -1;
     o->base = (unsigned char *)base;
     memset(o->base, 0, max);
     for (int i = 0; i < o->eh->phnum; i++) {
@@ -205,7 +202,7 @@ int main(int argc, char **argv, char **envp) {
     if (argc < 2) { printf("usage: ld-pagh <program> [args...]\n"); return 2; }
     static struct object exe, lib;
     memset(&exe, 0, sizeof exe); memset(&lib, 0, sizeof lib);
-    if (read_file(&exe, argv[1]) < 0) { printf("ld-pagh: cannot read %s (size/elf)\n", argv[1]); return 1; }
+    if (read_file(&exe, argv[1]) < 0) { printf("ld-pagh: cannot read %s\n", argv[1]); return 1; }
     if (load_object(&exe) < 0) { printf("ld-pagh: cannot map %s\n", argv[1]); return 1; }
     zero_bss(&exe);
     char libpath[256];

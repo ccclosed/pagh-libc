@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="430" viewBox="0 0 960 430">
+  <style>
+    .box { fill:#f5f8fc; stroke:#264653; stroke-width:2; rx:10; }
+    .code { fill:#0e1218; }
+    .t { font-family:'DejaVu Sans Mono',monospace; font-size:14px; fill:#e6edf3; }
+    .h { font-family:'DejaVu Sans',sans-serif; font-size:17px; font-weight:bold; fill:#1d3557; }
+    .s { font-family:'DejaVu Sans',sans-serif; font-size:12px; fill:#4a5568; }
+    .arr { stroke:#2a9d8f; stroke-width:2.5; fill:none; marker-end:url(#a); }
+  </style>
+  <defs><marker id="a" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8" fill="#2a9d8f"/></marker></defs>
+  <text x="24" y="32" class="h">pagh-libc: dynamic linking on the native ABI</text>
+  <text x="24" y="54" class="s">kernel loads a static ld-pagh; ld-pagh maps ET_DYN objects and applies RISC-V relocations, then calls e_entry.</text>
+
+  <rect class="box" x="24" y="80" width="290" height="118"/>
+  <text x="40" y="106" class="h">hello_dyn.elf</text>
+  <text x="40" y="128" class="s">ET_DYN, PT_INTERP ignored by the kernel</text>
+  <text x="40" y="148" class="s">DT_NEEDED libpagh-c.so</text>
+  <text x="40" y="168" class="s">.rela.plt: R_RISCV_JUMP_SLOT printf</text>
+
+  <rect class="box" x="24" y="228" width="290" height="150"/>
+  <text x="40" y="254" class="h">libpagh-c.so</text>
+  <text x="40" y="276" class="s">ET_DYN, shared libc subset</text>
+  <text x="40" y="296" class="s">.dynsym: printf, malloc, write, …</text>
+  <text x="40" y="316" class="s">.rela.dyn: RELATIVE + R_RISCV_64</text>
+  <text x="40" y="336" class="s">mapped RW, then text RX / data RW</text>
+
+  <rect class="box" x="374" y="128" width="250" height="190"/>
+  <text x="390" y="154" class="h">ld-pagh</text>
+  <text x="390" y="176" class="s">static ELF (runs directly)</text>
+  <text x="390" y="198" class="s">read_file / load_object</text>
+  <text x="390" y="218" class="s">zero bss</text>
+  <text x="390" y="238" class="s">relocate RELA / JUMP_SLOT</text>
+  <text x="390" y="258" class="s">resolve .dynsym by name</text>
+  <text x="390" y="278" class="s">mprotect page-by-page</text>
+  <text x="390" y="298" class="s">call base + e_entry</text>
+
+  <rect x="680" y="150" width="250" height="150" rx="10" fill="#0e1218" stroke="#264653" stroke-width="2"/>
+  <text x="696" y="178" class="t">pagh:rv64&gt; run /mnt/ld-pagh</text>
+  <text x="696" y="198" class="t">        /mnt/hello_dyn</text>
+  <text x="696" y="226" class="t">hello from a dynamically</text>
+  <text x="696" y="246" class="t">linked C program</text>
+  <text x="696" y="266" class="t">argc=1 argv0=/mnt/hello_dyn</text>
+  <text x="696" y="288" class="s" fill="#7fe3d5">exit 0 — real QEMU run</text>
+
+  <path class="arr" d="M314 140 L374 200"/>
+  <path class="arr" d="M314 300 L374 250"/>
+  <path class="arr" d="M624 222 L680 222"/>
+  <text x="430" y="348" class="s">R_RISCV_RELATIVE=3, R_RISCV_64=2, R_RISCV_JUMP_SLOT=5</text>
+</svg>

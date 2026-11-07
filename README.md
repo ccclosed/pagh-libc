@@ -59,12 +59,25 @@ and `pthread_join` requires the thread to be created through this libc (a
 16-slot registry).
 
 
-## Dynamic linking (experimental)
+## Dynamic linking (working)
 
-`build/libpagh-c.so` (ET_DYN, lld), `build/hello_dyn.elf` and the userland
-`examples/ld-pagh.c` loader are in the tree. The loader maps ET_DYN objects,
-applies `R_RISCV_RELATIVE`/`R_RISCV_64`/`R_RISCV_JUMP_SLOT`, resolves
-`DT_NEEDED` symbols and calls `e_entry`. **Status: experimental and currently
-faulting** during the loaded libc's relocation path (`store page fault` in
-`strdup` after mapping both objects); it is not claimed working yet. The stable
-path remains static linking (`build/*.elf`).
+`ld-pagh` is a userland ELF loader for the native ABI. The kernel still loads
+only a static entry program; `ld-pagh` then maps an ET_DYN executable and its
+`DT_NEEDED` shared library, applies `R_RISCV_RELATIVE`/`R_RISCV_64`/
+`R_RISCV_JUMP_SLOT`, resolves `.dynsym` by name, sets page protections, and
+calls the executable's entry.
+
+![dynamic linking](docs/dynamic-linking.svg)
+
+```text
+pagh:rv64> run /mnt/ld-pagh /mnt/hello_dyn
+hello from a dynamically linked C program
+argc=1 argv0=/mnt/hello_dyn
+run: /mnt/ld-pagh exited with code 0
+```
+
+Build inputs: `build/libpagh-c.so` (LLD `-shared`), `build/hello_dyn.elf`
+(PIE `-e main`, `DT_NEEDED libpagh-c.so`) and `build/ld-pagh.elf` (static).
+Limits: one `DT_NEEDED` library (the loader also accepts the same directory or
+`/mnt`), no symbol versioning, no TLS, no `init`/`fini` arrays, no lazy
+binding, no `dlopen`. A statically linked binary does not need the loader.

@@ -33,6 +33,9 @@ $LLD -flavor gnu -shared -soname libpagh-c.so -o build/libpagh-c.so $PIC_OBJS
 $CC $CFLAGS -fPIC -c examples/hello_dyn.c -o build/hello_dyn.o
 $LLD -flavor gnu -pie -e main -o build/hello_dyn.elf build/hello_dyn.o build/libpagh-c.so
 for ex in examples/*.c; do
+    case "$ex" in
+        examples/hello_dyn.c) continue ;;  # built as a shared-lib PIE below
+    esac
     name="$(basename "$ex" .c)"
     $CC $CFLAGS -T link.ld "$ex" build/libpagh-c.a -lgcc -o "build/$name.elf"
 done
