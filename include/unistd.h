@@ -21,6 +21,13 @@ int getpid(void);
 void _exit(int code) __attribute__((noreturn));
 void exit(int code) __attribute__((noreturn));
 long sysconf(int name);
+typedef int pid_t;
+pid_t fork(void);
+int execv(const char *path, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
+pid_t waitpid(pid_t pid, int *status, int options);
+pid_t getppid(void);
+#define WNOHANG 1
 int chdir(const char *path);
 char *getcwd(char *buf, unsigned long size);
 #define ERANGE 34

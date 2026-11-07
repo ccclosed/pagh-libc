@@ -41,7 +41,7 @@ run /mnt/hello
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup` |
 | stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar` |
 | files | `open/read/write/close/lseek`, `stat/fstat`, `opendir/readdir/closedir` |
-| process | `getpid`, `sched_yield`, `sleep/usleep`, `exit` |
+| process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `clock_gettime`, `time`, `nanosleep` |
 | threads | `pthread_create/join/exit/self`, `pthread_attr_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
 | signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
@@ -50,7 +50,7 @@ run /mnt/hello
 
 ## Honest limits
 
-No dynamic loader, no TLS, no `fork`/`exec` wrappers yet (raw syscalls exist),
+No dynamic loader, no TLS, `fork/execv/waitpid` wrappers exist (0.16 ABI),
 no `setenv`/`putenv` (environ is a read-only snapshot from the kernel frame),
 no locale, no wide chars, no `chdir` in the kernel (libc keeps a process-local
 cwd and rewrites relative paths), no per-thread malloc (the brk heap is shared

@@ -27,6 +27,10 @@
 #define SYS_FCHMODAT 53
 #define SYS_FTRUNCATE 46
 #define SYS_RENAMEAT2 276
+#define SYS_FORK 1000
+#define SYS_EXECVE 221
+#define SYS_WAIT4 260
+#define SYS_GETPPID 173
 
 #define AT_FDCWD (-100)
 #define AT_REMOVEDIR 0x200
