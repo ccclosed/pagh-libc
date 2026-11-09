@@ -26,6 +26,7 @@ extern int errno;
 #define ENOTEMPTY 39
 #define ELOOP 40
 #define EOVERFLOW 75
+#define EPROTO 71
 #define ENOTSOCK 88
 #define EDESTADDRREQ 89
 #define EMSGSIZE 90
@@ -41,4 +42,8 @@ extern int errno;
 #define ETIMEDOUT 110
 #define ECONNREFUSED 111
 #define EHOSTUNREACH 113
+/* The TLS session syscalls (1100..1103) return this when the server's
+ * certificate was rejected — chain, SAN, clock window or `CertificateVerify`.
+ * Linux's number, so a program that checks 129 keeps working. */
+#define EKEYREJECTED 129
 #endif

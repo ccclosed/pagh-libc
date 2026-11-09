@@ -10,14 +10,14 @@ small, auditable C runtime for a hobby OS. It also ships the userland dynamic
 loader `ld-pagh` and, since 0.9.0, a runtime `dlopen`/`dlsym` API in the shared
 libc; 0.10.0 makes that API follow the new object's `DT_NEEDED` recursively and
 adds the `RTLD_GLOBAL`/`RTLD_LOCAL` scopes and `RTLD_DEFAULT`/`RTLD_NEXT`
-lookups. **0.11.0** adds the BSD socket subset over kernel 0.17/0.18
+lookups. **0.12.0** adds userland TLS over kernel 0.21 (`getrandom`, `tls_connect`/`tls_write`/`tls_read`/`tls_close`, `https_get`). **0.11.0** added the BSD socket subset over kernel 0.17/0.18
 (TCP client, listener and `accept`, UDP datagrams, the ABI's `sockaddr_in`,
 `inet_*` and byte-order helpers), a minimal DNS A-record resolver over UDP
 (`gethostbyname` and a `getaddrinfo`-lite), exact `%f`/`%e`/`%g` float
 formatting, and `strerror`/`perror`. TLS is deliberately **not** part of it;
 *TLS is not reachable from userland* below explains exactly why.
 
-Version **0.11.0** (`VERSION`, tag `v0.11.0`).
+Version **0.12.0** (`VERSION`, tag `v0.12.0`).
 
 ## Build the toolchain
 
@@ -253,23 +253,31 @@ field), but it does not save FP registers on trap entry or thread switch, so
 floating point is safe in single-threaded code while two threads that both
 compute with floats can clobber each other's registers.
 
-## TLS is not reachable from userland (documented, not shipped)
+## TLS (0.12.0)
 
-The kernel's TLS 1.3 client (0.19.0) is reachable **only** from its own shell:
-`https <url>` calls `net::tls::https_get_at` in supervisor mode
-(`src/shell.rs`). There is no syscall, device node or VFS entry for it — the
-kernel's ABI document lists TLS among the socket calls userland does not get —
-so a C wrapper would need a kernel change first, and this library cannot make
-one from userland.
+The kernel (pagh-riscv 0.21.0) exposes a fail-closed TLS 1.3 client to userland:
+`getrandom(278)` plus pagh-native `tls_connect`/`tls_write`/`tls_read`/`tls_close`
+(1100-1103). `include/pagh_tls.h` wraps them:
 
-The second obstacle is entropy: the kernel's pool is seeded from QEMU's
-`/chosen/rng-seed` (`src/entropy.rs`) and no `getrandom`-shaped syscall exposes
-any of it to userland. A TLS 1.3 ClientHello with predictable randomness is
-worse than no TLS — the rule the kernel applies to itself — so 0.11.0 ships no
-TLS API rather than a stub that cannot work. (If a future kernel adds both a
-TLS fetch syscall and an entropy call, the wrapper belongs here next to
-`socket.c`; until then the honest answer is this paragraph.)
+```c
+int fd = pagh_tls_connect(tcp_fd, "example.com");   /* handshake + verification */
+long n = pagh_tls_write(fd, req, req_len);
+long r = pagh_tls_read(fd, buf, sizeof buf);
+pagh_tls_close(fd);
 
+long body = https_get("example.com", "/", out, sizeof out);  /* TCP + TLS + HTTP/1.1 */
+```
+
+Verification is the kernel's and is not optional for this wrapper: chain to the
+committed CA bundle, SAN hostname, validity window and `CertificateVerify`; a
+rejected certificate returns `-1` with `errno == EKEYREJECTED`/`EPROTO`.
+`tools/live-tls.py` proves `https_get` of example.com plus fail-closed
+negatives (bad host, self-signed chain, wrong name, non-200, small cap) and the
+socket/DNS/dlopen/thread regressions; transcript `docs/live-tls.txt`.
+
+Still absent: mTLS, session resumption, `close_notify` on drop, TLS < 1.3,
+and CA pinning/chain inspection from userland (use the vendored Rust path for
+that).
 ## Dynamic linking (working)
 
 `ld-pagh` is a userland ELF loader for the native ABI. The kernel still loads

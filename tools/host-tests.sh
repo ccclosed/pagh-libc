@@ -28,4 +28,8 @@ echo "== DNS message test (build/parse, compression, negative cases) =="
 $CC -O2 -Iinclude tests/dns_test.c src/dns.c -o build/host_dns_test
 ./build/host_dns_test
 
+echo "== HTTP framing test (head parse, chunked decode, refusal cases) =="
+$CC -O2 -Iinclude tests/http_test.c src/http.c -o build/host_http_test
+./build/host_http_test
+
 echo "host-tests: PASS"

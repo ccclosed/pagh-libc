@@ -45,6 +45,16 @@
 #define SYS_GETSOCKOPT 209
 #define SYS_SHUTDOWN 210
 
+/* Entropy and kernel TLS sessions (kernel >= 0.21.0). 278 keeps Linux's
+ * asm-generic number; 1100..1103 are pagh-native, so they can never collide
+ * with a Linux syscall this ABI might grow later. The wrappers and the
+ * convenience HTTPS call live in <pagh_tls.h>. */
+#define SYS_GETRANDOM 278
+#define SYS_TLS_CONNECT 1100
+#define SYS_TLS_WRITE 1101
+#define SYS_TLS_READ 1102
+#define SYS_TLS_CLOSE 1103
+
 #define AT_FDCWD (-100)
 #define AT_REMOVEDIR 0x200
 
