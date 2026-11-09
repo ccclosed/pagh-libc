@@ -6,13 +6,18 @@ A freestanding C library for the **native pagh-riscv ABI** (not Linux compat):
 
 It is what lets C programs run on pagh: compile with the xPack RISC-V GCC,
 link against this library, and `run /mnt/hello`. It is **not glibc** — it is a
-small, auditable C runtime for a hobby OS with a 52-syscall ABI. It also ships
-the userland dynamic loader `ld-pagh` and, since 0.9.0, a runtime
-`dlopen`/`dlsym` API in the shared libc; 0.10.0 makes that API follow the new
-object's `DT_NEEDED` recursively and adds the `RTLD_GLOBAL`/`RTLD_LOCAL` scopes
-and `RTLD_DEFAULT`/`RTLD_NEXT` lookups.
+small, auditable C runtime for a hobby OS. It also ships the userland dynamic
+loader `ld-pagh` and, since 0.9.0, a runtime `dlopen`/`dlsym` API in the shared
+libc; 0.10.0 makes that API follow the new object's `DT_NEEDED` recursively and
+adds the `RTLD_GLOBAL`/`RTLD_LOCAL` scopes and `RTLD_DEFAULT`/`RTLD_NEXT`
+lookups. **0.11.0** adds the BSD socket subset over kernel 0.17/0.18
+(TCP client, listener and `accept`, UDP datagrams, the ABI's `sockaddr_in`,
+`inet_*` and byte-order helpers), a minimal DNS A-record resolver over UDP
+(`gethostbyname` and a `getaddrinfo`-lite), exact `%f`/`%e`/`%g` float
+formatting, and `strerror`/`perror`. TLS is deliberately **not** part of it;
+*TLS is not reachable from userland* below explains exactly why.
 
-Version **0.10.0** (`VERSION`, tag `v0.10.0`).
+Version **0.11.0** (`VERSION`, tag `v0.11.0`).
 
 ## Build the toolchain
 
@@ -36,24 +41,33 @@ static `build/ld-pagh.elf`, and the shared objects `libextra.so`,
 ## Run in QEMU
 
 ```sh
-# copy build/hello into a disk image (mke2fs -d) and boot pagh-riscv 0.16.2/0.18.0
+# copy build/hello into a disk image (mke2fs -d) and boot pagh-riscv
 run /mnt/hello
 # dynamic:
 run /mnt/ld-pagh /mnt/hello_dyn
+# sockets, against host peers (kernel 0.17+: UDP; 0.18+: listen/accept)
+run /mnt/tcp_server 45679          # + QEMU hostfwd from a host client
+run /mnt/tcp_client 10.0.2.2 9050  # + a host echo server on 127.0.0.1:9050
+run /mnt/udp_echo 10.0.2.2 9050 3  # + a host UDP echo server
+run /mnt/dns_lookup example.com    # over /etc/resolv.conf (or @A.B.C.D[:port])
+run /mnt/float_printf              # %f/%e/%g and FPU arithmetic
 ```
 
 `tools/live-dlopen.sh` builds the disk and drives the dlopen test through a
-pagh-riscv checkout's `tools/run.py`; see *Runtime loading* below.
+pagh-riscv checkout's `tools/run.py`; `tools/live-sockets.py` does the same for
+sockets, DNS and `%f`, with host peers (see *Live evidence* below).
 
 ## Status
 
 | Area | Provided |
 |---|---|
 | start/exit | `_start`, `exit`, `atexit` (LIFO), `abort` |
-| syscalls | `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit sched_yield getpid` |
+| syscalls | `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit sched_yield getpid`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
 | memory | `malloc/calloc/realloc/free` (bump `brk`, `free` no-op), `memcpy/memset/memmove/memcmp` |
-| strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup` |
-| stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering |
+| strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strerror`; `perror` in stdio |
+| stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering; **`%f %e %g`** (exact IEEE-754 digits, half-even rounding), flags `- + space # 0`, `*` and `l/ll/h/hh/z` |
+| sockets | `include/sys/socket.h`: `socket/bind/listen/accept/connect/send/sendto/recv/recvfrom/setsockopt/getsockopt/shutdown`, `struct sockaddr_in`, `AF_INET`, `SOCK_STREAM`, `SOCK_DGRAM`, `SOCK_NONBLOCK`, `MSG_DONTWAIT`, `INADDR_ANY`; `htons/htonl/ntohs/ntohl`, `inet_aton/inet_addr/inet_ntoa/inet_pton/inet_ntop`; errors are the kernel's errno |
+| dns | `include/netdb.h`: `gethostbyname`, `getaddrinfo` (A only), `freeaddrinfo`, `gai_strerror`, `hstrerror`, `h_errno`; one A query over UDP to the DHCP server named in `resolv.conf` (plus `pagh_resolv_set_server`/`pagh_resolv_server`/`pagh_resolv_source`) |
 | files | `open/read/write/close/lseek`, `stat/fstat`, `opendir/readdir/closedir` |
 | env | `getenv/setenv/unsetenv` (mutable layer over the kernel frame) |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
@@ -65,13 +79,43 @@ pagh-riscv checkout's `tools/run.py`; see *Runtime loading* below.
 
 ## Honest limits
 
-The library is deliberately small. It has no TLS (the loader rejects `STT_TLS`
-relocations), no locale, no wide characters, no `putenv`, and no kernel `chdir`
-(libc keeps a process-local cwd and rewrites relative paths). `malloc` is a bump
-allocator: `free` is a no-op, there is no per-thread heap and no locking, and
-`realloc` copies `size` bytes without knowing the old size. `FILE` has no
-locking. `pthread_join` only works for threads created through this libc (a
-16-slot registry).
+The library is deliberately small. It has no *thread-local storage* (the loader
+rejects `STT_TLS` relocations — a different thing from the TLS networking
+protocol discussed below), no locale, no wide characters, no `putenv`, and no
+kernel `chdir` (libc keeps a process-local cwd and rewrites relative paths).
+`malloc` is a bump allocator: `free` is a no-op, there is no per-thread heap and
+no locking, and `realloc` copies `size` bytes without knowing the old size.
+`FILE` has no locking. `pthread_join` only works for threads created through
+this libc (a 16-slot registry).
+
+Socket and DNS limits are the kernel's, made visible rather than papered over:
+
+- One active-open TCP client and **one** listener at a time; the accept queue
+  holds four handshaken connections (`backlog` clamps to 1..4). UDP sockets are
+  not limited in the same way, but each bound port keeps four datagrams and the
+  oldest is dropped on a fifth. A descriptor table is 16 slots per run, and a
+  run closes whatever it left open.
+- UDP payloads are at most 1024 bytes (`EMSGSIZE` above that, no
+  fragmentation); `sendto` needs a destination because the kernel has **no UDP
+  `connect`**, and `read`/`write` on a UDP socket are the address-less shapes.
+- TCP `recv` is non-blocking on this ABI: `-EAGAIN` means "poll again" and 0
+  means the peer closed, so a program that wants a blocking read loops (the
+  examples show the loop). `shutdown` closes both directions; there is no
+  half-close.
+- Only `MSG_DONTWAIT` is understood, and only where the kernel documents it
+  (UDP send/recv). `SOCK_CLOEXEC` is not accepted. `socketpair`, `select`,
+  `sendmsg`/`recvmsg`, IPv6 and TLS answer `-ENOSYS` from the kernel.
+- The resolver has no cache (a `gethostbyname` followed by a `getaddrinfo` asks
+  the server twice — visible in the live transcript), no CNAME chasing, no
+  PTR/AAAA queries, no search list or NSS, and no TCP fallback for a truncated
+  answer. `gethostbyname` returns static storage and is not thread-safe;
+  `getaddrinfo`'s service names come from a fixed ten-entry table.
+- The server address comes from a file because the ABI cannot read the DHCP
+  lease. `nameserver A.B.C.D[:port]` is understood; the `:port` suffix is a
+  pagh extension so a test can run its own server above 1024.
+- `%f`'s precision is clamped at 1000, `%a`/`%A` are not implemented, and `%Lf`
+  prints the literal `%Lf` instead of reading a `long double` from the wrong
+  registers.
 
 Dynamic-loader limits are exact:
 
@@ -120,6 +164,111 @@ Dynamic-loader limits are exact:
   must total at most 8; a `dlopen` that fails after mapping unmaps what it
   mapped, so a rejected object does not permanently consume a region.
 - A constructor that faults kills the process; there is no recovery path.
+
+## Sockets (0.11.0)
+
+`include/sys/socket.h` is the whole surface; `<netinet/in.h>` and
+`<arpa/inet.h>` are one-line wrappers around it, so any include order works.
+The calls are thin wrappers over the kernel's syscalls 198–210, with
+`send`/`recv` as the address-less spellings of 206/207 and every negative return
+mapped into `errno` (`EADDRINUSE`, `ECONNREFUSED`, `EAGAIN`, `EMSGSIZE`, …).
+Addresses are the ABI's own 16-byte `struct sockaddr_in` (little-endian family,
+**big-endian** port, four raw address bytes).
+
+| call | the kernel contract the wrapper exposes |
+|---|---|
+| `socket(AF_INET, SOCK_STREAM\|SOCK_DGRAM[\|SOCK_NONBLOCK], 0)` | one active-open TCP client, any number of UDP sockets; other domains/types are `EAFNOSUPPORT` |
+| `bind` | `0.0.0.0` or the current lease address, port 0 = ephemeral; length must be exactly 16 |
+| `listen` | turns a bound stream socket into the one listener; backlog clamps to 1..4 |
+| `accept` | pops one handshaken connection (30 s poll; `SOCK_NONBLOCK` returns `EAGAIN` at once) and fills the peer address |
+| `connect` | IPv4 literal, polls until the handshake completes |
+| `send`/`sendto` | synchronous for TCP; UDP needs a destination and ≤ 1024 bytes, flags 0 or `MSG_DONTWAIT` |
+| `recv`/`recvfrom` | TCP is **non-blocking** (`EAGAIN` = poll again, 0 = peer closed); UDP blocks, or polls with `MSG_DONTWAIT` |
+| `setsockopt` | accepts `SO_REUSEADDR`, `SO_KEEPALIVE`, `SO_RCVTIMEO`, `SO_SNDTIMEO`, `TCP_NODELAY` and ignores them; anything else is `ENOPROTOOPT` |
+| `getsockopt` | `SO_TYPE` and `SO_ERROR` are real; the timeouts read back as zero |
+| `shutdown` | closes both directions (no half-close); the descriptor stays open |
+
+Examples: [`examples/tcp_server.c`](examples/tcp_server.c) (bind/listen/accept
+and a line echo), [`examples/tcp_client.c`](examples/tcp_client.c)
+(connect/send/recv against a host echo server) and
+[`examples/udp_echo.c`](examples/udp_echo.c) (bind plus N sendto/recvfrom round
+trips). The live run and its exact output are below.
+
+## DNS (0.11.0)
+
+`include/netdb.h`, built from [`src/dns.c`](src/dns.c) (RFC 1035 messages, no
+sockets, host-tested) and [`src/netdb.c`](src/netdb.c) (configuration and the
+UDP exchange):
+
+```c
+struct hostent *he = gethostbyname("example.com");     /* one A record */
+struct addrinfo hints = { .ai_family = AF_INET, .ai_socktype = SOCK_STREAM };
+struct addrinfo *res;
+getaddrinfo("example.com", "http", &hints, &res);
+```
+
+The server is chosen in this order: a pin set with
+`pagh_resolv_set_server("10.0.2.2:9053")` (pagh extension), then
+`nameserver A.B.C.D[:port]` in `/etc/resolv.conf`, then the same line in
+`/mnt/etc/resolv.conf` (where a pagh ext2 image lives). The `:port` suffix is a
+pagh extension for tests that must run a server above 1024; the default is 53.
+
+The ABI has no way to read the DHCP lease, so the DHCP-provided server reaches
+userland the way it does on a normal system: through `resolv.conf`. The live
+test makes that chain explicit — it reads the address out of the guest's own
+`net` output and writes it into the image before the boot that resolves through
+it.
+
+Each call sends one A question over UDP, three attempts two seconds apart, and
+accepts a reply only if it comes from the server address, carries the query's
+transaction id **and** echoes the question name; anything else is ignored while
+the wait continues (the live test proves this with a wrong-id decoy packet that
+carries a different address). Name compression in the answer is followed with a
+32-jump bound and a 255-byte name cap. RCODE ≠ 0 becomes `HOST_NOT_FOUND`; a
+well-formed answer with no A record becomes `NO_DATA`; no answer becomes
+`TRY_AGAIN` (`EAI_AGAIN` from `getaddrinfo`).
+
+## `%f`, `%e`, `%g` (0.11.0)
+
+`vsnprintf` formats floats by converting the IEEE-754 bit pattern exactly: a
+small binary bignum shifts the mantissa into the integer part and peels the
+fraction digit by digit, so `%.20f` of 0.1 prints the true binary value of 0.1,
+`printf("%.0f", 0.5)` rounds half-to-even to `0`, and values past 2^53 print
+their real decimal digits. The flags `- + space # 0`, `*` width/precision and
+the `l`/`ll`/`h`/`hh`/`z` integer lengths were extended in the same pass, along
+with `strerror`/`perror`.
+
+Verification is differential, not visual: [`tools/host-tests.sh`](tools/host-tests.sh)
+compiles this library's `vsnprintf` beside the host's glibc and compares both on
+the edge cases and 12 000 random bit patterns × 8 precisions × 16 format
+strings — **1 347 397 comparisons, 0 differences** at 0.11.0. (The test
+compiles the library sources separately on purpose: renaming `snprintf` in the
+test translation unit too would turn the comparison into a self-check that
+always passes, which is exactly the bug this harness had to be fixed for.)
+
+One kernel-side caveat, verified live by
+[`examples/float_printf.c`](examples/float_printf.c): U-mode floating point
+works (the firmware leaves `sstatus.FS` enabled), but the kernel does not save
+FP registers on trap entry or thread switch, so floating point is safe in
+single-threaded code while two threads that both compute with floats can clobber
+each other's registers.
+
+## TLS is not reachable from userland (documented, not shipped)
+
+The kernel's TLS 1.3 client (0.19.0) is reachable **only** from its own shell:
+`https <url>` calls `net::tls::https_get_at` in supervisor mode
+(`src/shell.rs`). There is no syscall, device node or VFS entry for it — the
+kernel's ABI document lists TLS among the socket calls userland does not get —
+so a C wrapper would need a kernel change first, and this library cannot make
+one from userland.
+
+The second obstacle is entropy: the kernel's pool is seeded from QEMU's
+`/chosen/rng-seed` (`src/entropy.rs`) and no `getrandom`-shaped syscall exposes
+any of it to userland. A TLS 1.3 ClientHello with predictable randomness is
+worse than no TLS — the rule the kernel applies to itself — so 0.11.0 ships no
+TLS API rather than a stub that cannot work. (If a future kernel adds both a
+TLS fetch syscall and an entropy call, the wrapper belongs here next to
+`socket.c`; until then the honest answer is this paragraph.)
 
 ## Dynamic linking (working)
 
@@ -269,3 +418,44 @@ overridden with `KERNEL=...`.
 
 Earlier milestones' transcripts remain in `docs/live-dynamic*.txt` and
 `docs/live-dlopen-0.9.0.txt`.
+
+## Live evidence
+
+[`docs/live-sockets.txt`](docs/live-sockets.txt) is the committed transcript of
+one `tools/live-sockets.py` run: an ext2 image built with `mke2fs -d`, the
+kernel booted twice through the checkout's own `tools/run.py` (once to read the
+DHCP lease, once to run everything), four host peers, and every command driven
+through `--attach` so each program's output is delimited. Its header records the
+kernel revision and SHA-256, the host libc revision and the QEMU version, so the
+run can be reproduced or falsified rather than trusted.
+
+What it shows, per feature (exact lines from the transcript):
+
+| feature | line |
+|---|---|
+| DHCP lease | `net         DHCP ip 10.0.2.15/255.255.255.0 gw 10.0.2.2 dns 10.0.2.3 lease 86400 s` |
+| TCP server | `tcp_server: accept from 10.0.2.2:36454` / `tcp_server: recv 16 bytes: hello from host` / `tcp_server: sent 20 bytes` / `tcp_server: peer closed` / `tcp_server: ok` |
+| host side of the server test | `connected after 1 attempt(s); sent 'hello from host'; received b'ack:hello from host\n'` |
+| TCP client | `tcp_client: connected` / `tcp_client: SO_ERROR=0` / `tcp_client: echo 13 bytes: pagh-tcp-ping` / `tcp_client: ok` |
+| UDP echo | `udp_echo: bound 0.0.0.0:45678` and three `sent`/`recv` pairs / `udp_echo: ok (3 datagrams echoed)` |
+| DNS over a host server | `dns: gethostbyname echo.pagh.test -> 203.0.113.7 (type=2 len=4)` / `dns: getaddrinfo echo.pagh.test http -> 203.0.113.7:80 family=2 socktype=1 addrlen=16` |
+| DNS negative | `dns: nx.pagh.test: FAILED: host not found (h_errno=1)` (the server answered NXDOMAIN) |
+| DNS over the DHCP server | `dns: server 10.0.2.3:53 (from /mnt/etc/resolv.conf)` / `dns: gethostbyname example.com -> 8.6.112.0` |
+| `%f`/`%e`/`%g` + FPU | `float: %.20f    0.10000000000000000555 -> 0.10000000000000000555   ok` / `float: 355/113 = 3.141593` / `float: ok (22 formatted values + FPU arithmetic)` |
+| dlopen regression | the full 0.10.0 line set, ending `dlopen: RTLD_GLOBAL promotes an already-loaded group` / `run: /mnt/ld-pagh exited with code 0` |
+| threads / signals / files | `counter=8 ret=50/30`, `hits=1`, `line one` + `line two`, `counter=1000`, `ready=1 seen=1`, `cwd=/mnt`, `relative read=hello libc`, all `exited with code 0` |
+
+```sh
+./build.sh                 # cross toolchain needed
+tools/host-tests.sh        # printf differential + DNS message tests, host-only
+PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
+```
+
+The committed transcript was captured with `qemu-system-riscv64` 10.2.2, xPack
+GCC 15.2.0-1 and rust-lld from nightly-2026-07-12, against pagh-riscv revision
+`fc19a17` (crate 0.20.0, the demand-grown-stack release), kernel SHA-256
+`3f4af143a4014acc35b87240977999da4dc4a99ed153a963af4b428643ce119f` — a scratch
+`cargo build --release --locked` of that commit, so the kernel tree is untouched
+(the header of the transcript carries these values). The script also runs green
+against 0.19.0; earlier live socket transcripts on 0.17.0/0.18.0 live in the
+kernel repository's `docs/live-udp.txt` and `docs/live-tcp-server.txt`.
