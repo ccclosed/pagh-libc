@@ -68,6 +68,7 @@ long __pagh_syscall3(long nr, long a0, long a1, long a2);
 #define SYS_RT_SIGPROCMASK 135
 #define SYS_RT_SIGRETURN 139
 #define SYS_MMAP 222
+#define SYS_MPROTECT 226
 #define SYS_MUNMAP 215
 #define CLONE_VM 0x100
 #define CLONE_FS 0x200

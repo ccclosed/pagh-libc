@@ -32,16 +32,24 @@ $LLD -flavor gnu -shared -soname libpagh-c.so -o build/libpagh-c.so $PIC_OBJS
 # Second shared library for the multi-DT_NEEDED test.
 $CC $CFLAGS -fPIC -c examples/libextra.c -o build/libextra.o
 $LLD -flavor gnu -shared -soname libextra.so -o build/libextra.so build/libextra.o
+# Runtime plugin: no DT_NEEDED on purpose, so dlopen must resolve its undefined
+# extra_global/printf against the objects already in the process.
+$CC $CFLAGS -fPIC -c examples/libplug.c -o build/libplug.o
+$LLD -flavor gnu -shared -soname libplug.so -init plug_dt_init -o build/libplug.so build/libplug.o
+# rust-lld emits R_RISCV_64 for libplug's imported data GOT slot; re-tag that
+# one test relocation to the loader's legacy type-6 GLOB_DAT-compatible arm so
+# the live dlopen exercises it too (see README: RISC-V has no R_RISCV_GLOB_DAT).
+python3 tools/patch_reloc.py build/libplug.so 2 6 --expect 1
 # Dynamically linked test executable (no crt0; entry main, loader passes args).
 $CC $CFLAGS -fPIC -c examples/hello_dyn.c -o build/hello_dyn.o
 $LLD -flavor gnu -pie -e main -o build/hello_dyn.elf build/hello_dyn.o \
     build/libextra.so build/libpagh-c.so
 for ex in examples/*.c; do
     case "$ex" in
-        examples/hello_dyn.c) continue ;;  # built as a shared-lib PIE below
+        examples/hello_dyn.c|examples/libextra.c|examples/libplug.c) continue ;;
     esac
     name="$(basename "$ex" .c)"
     $CC $CFLAGS -T link.ld "$ex" build/libpagh-c.a -lgcc -o "build/$name.elf"
 done
-echo "built:"
+echo "pagh-libc $(cat VERSION): built:"
 ls -l build/*.elf
