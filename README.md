@@ -241,17 +241,17 @@ with `strerror`/`perror`.
 Verification is differential, not visual: [`tools/host-tests.sh`](tools/host-tests.sh)
 compiles this library's `vsnprintf` beside the host's glibc and compares both on
 the edge cases and 12 000 random bit patterns × 8 precisions × 16 format
-strings — **1 347 397 comparisons, 0 differences** at 0.11.0. (The test
-compiles the library sources separately on purpose: renaming `snprintf` in the
-test translation unit too would turn the comparison into a self-check that
-always passes, which is exactly the bug this harness had to be fixed for.)
+strings — **1 347 397 comparisons, 0 differences** at 0.11.0. (The library
+sources are compiled separately on purpose: renaming `snprintf` in the test
+translation unit as well would compare the library with itself, which is the
+bug this harness was fixed for before its verdict was believed.)
 
 One kernel-side caveat, verified live by
 [`examples/float_printf.c`](examples/float_printf.c): U-mode floating point
-works (the firmware leaves `sstatus.FS` enabled), but the kernel does not save
-FP registers on trap entry or thread switch, so floating point is safe in
-single-threaded code while two threads that both compute with floats can clobber
-each other's registers.
+executes on this kernel (it does not touch `sstatus.FS`, and QEMU honours the
+field), but it does not save FP registers on trap entry or thread switch, so
+floating point is safe in single-threaded code while two threads that both
+compute with floats can clobber each other's registers.
 
 ## TLS is not reachable from userland (documented, not shipped)
 
@@ -426,15 +426,15 @@ one `tools/live-sockets.py` run: an ext2 image built with `mke2fs -d`, the
 kernel booted twice through the checkout's own `tools/run.py` (once to read the
 DHCP lease, once to run everything), four host peers, and every command driven
 through `--attach` so each program's output is delimited. Its header records the
-kernel revision and SHA-256, the host libc revision and the QEMU version, so the
-run can be reproduced or falsified rather than trusted.
+kernel revision and SHA-256, the pagh-libc revision and the QEMU version, so
+the run can be reproduced or falsified rather than trusted.
 
 What it shows, per feature (exact lines from the transcript):
 
 | feature | line |
 |---|---|
 | DHCP lease | `net         DHCP ip 10.0.2.15/255.255.255.0 gw 10.0.2.2 dns 10.0.2.3 lease 86400 s` |
-| TCP server | `tcp_server: accept from 10.0.2.2:36454` / `tcp_server: recv 16 bytes: hello from host` / `tcp_server: sent 20 bytes` / `tcp_server: peer closed` / `tcp_server: ok` |
+| TCP server | `tcp_server: accept from 10.0.2.2:<host port>` / `tcp_server: recv 16 bytes: hello from host` / `tcp_server: sent 20 bytes` / `tcp_server: peer closed` / `tcp_server: ok` |
 | host side of the server test | `connected after 1 attempt(s); sent 'hello from host'; received b'ack:hello from host\n'` |
 | TCP client | `tcp_client: connected` / `tcp_client: SO_ERROR=0` / `tcp_client: echo 13 bytes: pagh-tcp-ping` / `tcp_client: ok` |
 | UDP echo | `udp_echo: bound 0.0.0.0:45678` and three `sent`/`recv` pairs / `udp_echo: ok (3 datagrams echoed)` |

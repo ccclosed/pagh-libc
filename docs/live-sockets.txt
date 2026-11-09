@@ -3,11 +3,11 @@
 # kernel checkout: /home/oleg/pagh-riscv
 # kernel revision: fc19a17 (crate 0.20.0, tag 0.20.0)
 # kernel sha256: 3f4af143a4014acc35b87240977999da4dc4a99ed153a963af4b428643ce119f
-# pagh-libc revision: 9892b03 (dirty)
+# pagh-libc revision: c0b2beb (clean)
 # host: QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)
 # image: mke2fs -t ext2 -b 1024 -d <build/*.elf + etc/resolv.conf> disk.img
 # DHCP-leased DNS server: 10.0.2.3
-# guest TCP port: 45679 (QEMU hostfwd 127.0.0.1:45145)
+# guest TCP port: 45679 (QEMU hostfwd 127.0.0.1:52813)
 # guest UDP local port: 45678
 
 == boot 1: DHCP lease (net) ==
@@ -86,8 +86,8 @@ timebase    10000000 Hz
 console     NS16550 @ 0x10000000
 pmm         62649/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
 sv39        on, satp=0x8000000000080b45, identity 0x80000000..0x90000000 (RWX below 0x80b45000, RW above), 65549 pages, 13 device
-rtc         goldfish @ 0x101000 - 2026-11-09 14:15:32 UTC
-rtc         raw 0xb8f5fa70 0x18e66612 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+rtc         goldfish @ 0x101000 - 2026-11-09 14:22:27 UTC
+rtc         raw 0x6d208bb8 0x18e66673 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
 entropy     32 bytes from /chosen/rng-seed - TLS session keys available
 timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
 plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
@@ -106,7 +106,7 @@ net: virtio-net0 MAC 52:54:00:12:34:56
   ip 10.0.2.15 mask 255.255.255.0 gateway 10.0.2.2
   dns 10.0.2.3 lease 86400 s (server 10.0.2.2)
 pagh:rv64>
-== boot 2: hostfwd 127.0.0.1:45145 -> guest 10.0.2.15:45679 ==
+== boot 2: hostfwd 127.0.0.1:52813 -> guest 10.0.2.15:45679 ==
 
 OpenSBI v1.7
    ____                    _____ ____ _____
@@ -182,8 +182,8 @@ timebase    10000000 Hz
 console     NS16550 @ 0x10000000
 pmm         62649/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
 sv39        on, satp=0x8000000000080b45, identity 0x80000000..0x90000000 (RWX below 0x80b45000, RW above), 65549 pages, 13 device
-rtc         goldfish @ 0x101000 - 2026-11-09 14:15:35 UTC
-rtc         raw 0x6bd11e40 0x18e66613 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+rtc         goldfish @ 0x101000 - 2026-11-09 14:22:31 UTC
+rtc         raw 0x56298b20 0x18e66674 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
 entropy     32 bytes from /chosen/rng-seed - TLS session keys available
 timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
 plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
@@ -203,7 +203,7 @@ pagh:rv64>
 pagh:rv64> run /mnt/tcp_server 45679
 tcp_server: SO_TYPE=1 (SOCK_STREAM=1)
 tcp_server: listening on 0.0.0.0:45679
-tcp_server: accept from 10.0.2.2:36454
+tcp_server: accept from 10.0.2.2:45924
 tcp_server: recv 16 bytes: hello from host
 tcp_server: sent 20 bytes
 tcp_server: peer closed
@@ -215,8 +215,8 @@ connected after 1 attempt(s); sent 'hello from host'; received b'ack:hello from 
 
 == tcp_client: guest connect/send/recv to host peer ==
 
-pagh:rv64> run /mnt/tcp_client 10.0.2.2 37931 pagh-tcp-ping
-tcp_client: connecting to 10.0.2.2:37931
+pagh:rv64> run /mnt/tcp_client 10.0.2.2 40929 pagh-tcp-ping
+tcp_client: connecting to 10.0.2.2:40929
 tcp_client: connected
 tcp_client: SO_ERROR=0
 tcp_client: sent 13 bytes
@@ -225,32 +225,32 @@ tcp_client: ok
 run: /mnt/tcp_client exited with code 0
 pagh:rv64>
 == host TCP echo server ==
-port 37931; received b'pagh-tcp-ping'
+port 40929; received b'pagh-tcp-ping'
 
 == udp_echo: sendto/recvfrom round trips ==
 
-pagh:rv64> run /mnt/udp_echo 10.0.2.2 55227 3 45678
+pagh:rv64> run /mnt/udp_echo 10.0.2.2 55238 3 45678
 udp_echo: SO_TYPE=2 (SOCK_DGRAM=2)
 udp_echo: bound 0.0.0.0:45678
-udp_echo: sent 16 bytes to 10.0.2.2:55227: pagh udp echo #1
-udp_echo: recv 16 bytes from 10.0.2.2:55227: pagh udp echo #1
-udp_echo: sent 16 bytes to 10.0.2.2:55227: pagh udp echo #2
-udp_echo: recv 16 bytes from 10.0.2.2:55227: pagh udp echo #2
-udp_echo: sent 16 bytes to 10.0.2.2:55227: pagh udp echo #3
-udp_echo: recv 16 bytes from 10.0.2.2:55227: pagh udp echo #3
+udp_echo: sent 16 bytes to 10.0.2.2:55238: pagh udp echo #1
+udp_echo: recv 16 bytes from 10.0.2.2:55238: pagh udp echo #1
+udp_echo: sent 16 bytes to 10.0.2.2:55238: pagh udp echo #2
+udp_echo: recv 16 bytes from 10.0.2.2:55238: pagh udp echo #2
+udp_echo: sent 16 bytes to 10.0.2.2:55238: pagh udp echo #3
+udp_echo: recv 16 bytes from 10.0.2.2:55238: pagh udp echo #3
 udp_echo: ok (3 datagrams echoed)
 run: /mnt/udp_echo exited with code 0
 pagh:rv64>
 == host UDP echo server ==
-b'pagh udp echo #1' from 127.0.0.1:58261
-b'pagh udp echo #2' from 127.0.0.1:58261
-b'pagh udp echo #3' from 127.0.0.1:58261
+b'pagh udp echo #1' from 127.0.0.1:42860
+b'pagh udp echo #2' from 127.0.0.1:42860
+b'pagh udp echo #3' from 127.0.0.1:42860
 
 == dns_lookup: pinned host server, decoy packet first ==
 
-pagh:rv64> run /mnt/dns_lookup @10.0.2.2:36173 echo.pagh.test
-dns: pinned server 10.0.2.2:36173
-dns: server 10.0.2.2:36173 (from pinned)
+pagh:rv64> run /mnt/dns_lookup @10.0.2.2:54022 echo.pagh.test
+dns: pinned server 10.0.2.2:54022
+dns: server 10.0.2.2:54022 (from pinned)
 dns: gethostbyname echo.pagh.test -> 203.0.113.7 (type=2 len=4)
 dns: getaddrinfo echo.pagh.test http -> 203.0.113.7:80 family=2 socktype=1 addrlen=16
 dns: ok
@@ -258,17 +258,17 @@ run: /mnt/dns_lookup exited with code 0
 pagh:rv64>
 == dns_lookup: NXDOMAIN from the same server ==
 
-pagh:rv64> run /mnt/dns_lookup @10.0.2.2:36173 nx.pagh.test
-dns: pinned server 10.0.2.2:36173
-dns: server 10.0.2.2:36173 (from pinned)
+pagh:rv64> run /mnt/dns_lookup @10.0.2.2:54022 nx.pagh.test
+dns: pinned server 10.0.2.2:54022
+dns: server 10.0.2.2:54022 (from pinned)
 dns: nx.pagh.test: FAILED: host not found (h_errno=1)
 dns: 1 lookup(s) failed
 run: /mnt/dns_lookup exited with code 1
 pagh:rv64>
 == host DNS server ==
-query echo.pagh.test type=1 id=25075
-query echo.pagh.test type=1 id=40106
-query nx.pagh.test type=1 id=44226
+query echo.pagh.test type=1 id=2419
+query echo.pagh.test type=1 id=17450
+query nx.pagh.test type=1 id=8002
 decoy (wrong id, 198.51.100.9) sent before the real answer for echo.pagh.test; the guest printed 203.0.113.7
 
 == dns_lookup: DHCP-leased server via /mnt/etc/resolv.conf ==
@@ -276,7 +276,7 @@ decoy (wrong id, 198.51.100.9) sent before the real answer for echo.pagh.test; t
 pagh:rv64> run /mnt/dns_lookup example.com
 dns: server 10.0.2.3:53 (from /mnt/etc/resolv.conf)
 dns: gethostbyname example.com -> 8.6.112.0 (type=2 len=4)
-dns: getaddrinfo example.com http -> 8.6.112.0:80 family=2 socktype=1 addrlen=16
+dns: getaddrinfo example.com http -> 8.47.69.0:80 family=2 socktype=1 addrlen=16
 dns: ok
 run: /mnt/dns_lookup exited with code 0
 pagh:rv64>
