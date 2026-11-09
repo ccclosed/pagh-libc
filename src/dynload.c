@@ -2,10 +2,10 @@
  *
  * This is the same userland loader `ld-pagh` used to keep in examples/: it
  * reads an ET_DYN object into a private buffer, maps its PT_LOAD segments from
- * anonymous pages, applies R_RISCV_RELATIVE/R_RISCV_64/R_RISCV_JUMP_SLOT (and
- * the legacy type-6 GLOB_DAT arm described below), and calls
- * DT_INIT/DT_INIT_ARRAY.  It now lives in libc so the already-running program
- * can add an object at runtime through `dlopen`.
+ * anonymous pages, applies R_RISCV_RELATIVE/R_RISCV_32/R_RISCV_64/
+ * R_RISCV_JUMP_SLOT (and the legacy type-6 GLOB_DAT arm described below), and
+ * calls DT_INIT/DT_INIT_ARRAY.  It now lives in libc so the already-running
+ * program can add an object at runtime through `dlopen`.
  *
  * The loader state is per-process and owned by the loader copy inside the
  * statically linked `ld-pagh`.  That copy publishes a pointer in the shared
@@ -13,8 +13,24 @@
  * `dlsym` in libpagh-c.so operate on that one table.  Pointers in the table
  * are ordinary process addresses, so a shared libc can use them directly.
  *
+ * Scope model - what RTLD_GLOBAL/RTLD_LOCAL mean here:
+ *
+ *   - every object belongs to the *group* of the dlopen() that caused its
+ *     load; the group is identified by the table index of that call's root
+ *     object.  The program and its DT_NEEDED libraries are group 0;
+ *   - a relocation in object X is resolved against the global scope (group 0
+ *     plus every group promoted by RTLD_GLOBAL) first, then against X's own
+ *     group: its root and everything that root's DT_NEEDED pulled in,
+ *     recursively;
+ *   - dlopen() follows the new object's DT_NEEDED recursively and skips an
+ *     object that is already loaded, matched by absolute path;
+ *   - dlsym(handle) searches the handle's group, dlsym(RTLD_DEFAULT) the
+ *     global scope, and dlsym(RTLD_NEXT) the same scope the caller would be
+ *     relocated against, starting after the caller's own object.
+ *
  * No kernel support is involved: mapping is mmap(MAP_ANONYMOUS), protection is
- * mprotect, and the loaded object is just bytes copied from the file.
+ * mprotect, a failed dlopen tears its own mappings down with munmap, and the
+ * loaded object is just bytes copied from the file.
  */
 
 #include <pagh.h>
@@ -39,6 +55,7 @@
 #define STT_TLS 6
 
 #define R_RISCV_NONE 0
+#define R_RISCV_32 1
 #define R_RISCV_64 2
 #define R_RISCV_RELATIVE 3
 #define R_RISCV_JUMP_SLOT 5
@@ -60,6 +77,8 @@
 
 #define DL_MAX_OBJECTS 16
 #define DL_MAX_DEPS 8
+#define DL_MAX_DEPTH 8
+#define DL_MAX_PATH 512
 #define DL_MAX_FILE (8UL << 20)
 #define DL_MAX_IMAGE (64UL << 20)
 
@@ -90,6 +109,8 @@ struct dl_object {
     struct ehdr *eh;
     struct shdr *sh;
     unsigned long total;
+    int group;   /* index of the dlopen() root that pulled this object in */
+    int global;  /* in the global scope: group 0 or RTLD_GLOBAL */
 };
 
 struct dl_state {
@@ -137,6 +158,10 @@ static long sys_mmap(unsigned long len, int prot) {
 }
 static long sys_mprotect(unsigned long addr, unsigned long len, int prot) {
     return __pagh_syscall3(SYS_MPROTECT, (long)addr, (long)len, prot);
+}
+static long sys_munmap(unsigned long addr, unsigned long len) {
+    /* No two-argument stub exists; the extra zero arguments are ignored. */
+    return __pagh_syscall6(SYS_MUNMAP, (long)addr, (long)len, 0, 0, 0, 0);
 }
 
 static int read_file(struct dl_object *o, const char *path) {
@@ -280,15 +305,49 @@ static unsigned long resolve_in(struct dl_object *o, const char *name) {
     return 0;
 }
 
-static unsigned long resolve(struct dl_state *st, int nobj, const char *name) {
-    for (int k = 0; k < nobj; k++) {
-        unsigned long addr = resolve_in(&st->objs[k], name);
+/* The global scope: the program's group and every RTLD_GLOBAL group. */
+static unsigned long resolve_global(struct dl_state *st, const char *name) {
+    for (int i = 0; i < st->count; i++)
+        if (st->objs[i].global) {
+            unsigned long addr = resolve_in(&st->objs[i], name);
+            if (addr) return addr;
+        }
+    return 0;
+}
+
+/* What a relocation in objs[idx] resolves against: the global scope first,
+ * then the object's own dlopen() group. */
+static unsigned long resolve_for(struct dl_state *st, int idx, const char *name) {
+    unsigned long addr = resolve_global(st, name);
+    if (addr) return addr;
+    int group = st->objs[idx].group;
+    for (int i = 0; i < st->count; i++) {
+        struct dl_object *o = &st->objs[i];
+        if (o->global || o->group != group) continue;
+        addr = resolve_in(o, name);
         if (addr) return addr;
     }
     return 0;
 }
 
-static int relocate(struct dl_object *o, struct dl_state *st, int nobj) {
+/* dlsym(RTLD_NEXT): the caller's scope, after the caller's own object. */
+static unsigned long resolve_next(struct dl_state *st, int from, const char *name) {
+    int group = st->objs[from].group;
+    for (int i = from + 1; i < st->count; i++) {
+        struct dl_object *o = &st->objs[i];
+        if (!o->global && o->group != group) continue;
+        unsigned long addr = resolve_in(o, name);
+        if (addr) return addr;
+    }
+    return 0;
+}
+
+static void promote_group(struct dl_state *st, int group) {
+    for (int i = 0; i < st->count; i++)
+        if (st->objs[i].group == group) st->objs[i].global = 1;
+}
+
+static int relocate(struct dl_object *o, struct dl_state *st, int idx) {
     struct dynsym_view v;
     int have_syms = dynsym_view(o, &v) == 0;
     for (int i = 0; i < o->eh->shnum; i++) {
@@ -304,18 +363,20 @@ static int relocate(struct dl_object *o, struct dl_state *st, int nobj) {
             struct rela *re = (struct rela *)(o->data + r->off + j * entsize);
             unsigned type = (unsigned)re->info & 0xffffffffu;
             unsigned si = (unsigned)(re->info >> 32);
-            if (re->off > o->total || 8 > o->total - re->off) {
+            if (type == R_RISCV_NONE) continue;
+            /* R_RISCV_32 writes a 32-bit word, everything else here an
+             * address-sized one. */
+            unsigned long width = type == R_RISCV_32 ? 4 : 8;
+            if (re->off > o->total || width > o->total - re->off) {
                 dl_error_set1("relocation offset outside the image in %s", o->path);
                 return -1;
             }
             unsigned long where = (unsigned long)o->base + re->off;
             unsigned long val = 0;
-            if (type == R_RISCV_NONE) {
-                continue;
-            } else if (type == R_RISCV_RELATIVE) {
+            if (type == R_RISCV_RELATIVE) {
                 val = (unsigned long)o->base + (unsigned long)re->addend;
-            } else if (type == R_RISCV_64 || type == R_RISCV_JUMP_SLOT ||
-                       type == R_RISCV_GLOB_DAT_COMPAT) {
+            } else if (type == R_RISCV_32 || type == R_RISCV_64 ||
+                       type == R_RISCV_JUMP_SLOT || type == R_RISCV_GLOB_DAT_COMPAT) {
                 if (!have_syms || si >= v.count) {
                     dl_error_set1("relocation without a dynamic symbol in %s", o->path);
                     return -1;
@@ -331,7 +392,7 @@ static int relocate(struct dl_object *o, struct dl_state *st, int nobj) {
                 if (s->shndx == SHN_ABS) addr = s->value;
                 else if (s->shndx != SHN_UNDEF) addr = (unsigned long)o->base + s->value;
                 else {
-                    addr = resolve(st, nobj, nm);
+                    addr = resolve_for(st, idx, nm);
                     if (!addr) { dl_error_set1("unresolved symbol %s", nm); return -1; }
                 }
                 val = addr + (unsigned long)re->addend;
@@ -339,7 +400,8 @@ static int relocate(struct dl_object *o, struct dl_state *st, int nobj) {
                 dl_error_setu("unsupported relocation type %lu", type);
                 return -1;
             }
-            *(unsigned long *)where = val;
+            if (type == R_RISCV_32) *(unsigned int *)where = (unsigned int)val;
+            else *(unsigned long *)where = val;
         }
     }
     return 0;
@@ -414,25 +476,112 @@ static int object_index(struct dl_state *st, void *handle) {
     return (int)idx;
 }
 
+static int object_containing(struct dl_state *st, void *addr) {
+    unsigned long a = (unsigned long)addr;
+    for (int i = 0; i < st->count; i++) {
+        struct dl_object *o = &st->objs[i];
+        if (o->base && a >= (unsigned long)o->base && a < (unsigned long)o->base + o->total)
+            return i;
+    }
+    return -1;
+}
+
+/* Load one object plus its DT_NEEDED tree.  `group` is the index of the root
+ * object of the dlopen() (or 0 for the program itself); `global` says whether
+ * that group goes into the global scope.  Returns the object's table index, or
+ * -1 with dlerror set.  Already-loaded paths are reused, never mapped twice. */
+static int open_object(struct dl_state *st, const char *path, int group, int global, int depth) {
+    char abs[DL_MAX_PATH];
+    __pagh_abs(path, abs, sizeof abs);
+    unsigned long alen = strlen(abs);
+    if (!alen) { dl_error_set("dlopen: empty path"); return -1; }
+    /* __pagh_abs truncates at the buffer size, so a full buffer may be a
+     * silently shortened path: refuse it rather than open the wrong file. */
+    if (alen >= sizeof abs - 1) { dl_error_set("dlopen: object path is too long"); return -1; }
+
+    for (int i = 0; i < st->count; i++) {
+        if (!st->objs[i].path || strcmp(st->objs[i].path, abs)) continue;
+        /* Already loaded: dlopen() returns the same handle and does not run
+         * the constructors again.  A later RTLD_GLOBAL request still promotes
+         * the whole existing group into the global scope. */
+        if (global) promote_group(st, st->objs[i].group);
+        return i;
+    }
+    if (depth >= DL_MAX_DEPTH) {
+        dl_error_set1("DT_NEEDED nesting is too deep at %s", abs);
+        return -1;
+    }
+    if (st->count >= DL_MAX_OBJECTS) { dl_error_set("too many loaded objects"); return -1; }
+
+    struct dl_object *o = &st->objs[st->count];
+    memset(o, 0, sizeof *o);
+    if (read_file(o, abs) < 0) return -1;
+    if (load_object(o) < 0) return -1;
+    o->group = group;
+    o->global = global;
+    int idx = st->count++;
+
+    unsigned long needed[DL_MAX_DEPS];
+    int nneeded = 0;
+    if (collect_needed(o, needed, DL_MAX_DEPS, &nneeded) < 0) return -1;
+    if (!nneeded) return idx;
+
+    unsigned long strtab = dyn_value(o, DT_STRTAB);
+    char dir[DL_MAX_PATH];
+    if (file_dir(abs, dir, sizeof dir) < 0) {
+        dl_error_set1("object path too long: %s", abs);
+        return -1;
+    }
+    for (int i = 0; i < nneeded; i++) {
+        const char *name = needed_name(o, strtab, needed[i]);
+        if (!name || !*name) { dl_error_set1("bad DT_NEEDED string in %s", abs); return -1; }
+        char dep[DL_MAX_PATH];
+        if (strchr(name, '/')) {
+            /* A DT_NEEDED with a slash names a path, not a bare soname. */
+            __pagh_abs(name, dep, sizeof dep);
+        } else {
+            unsigned long dl = strlen(dir), nl = strlen(name);
+            if (dl + 1 + nl + 1 > sizeof dep) {
+                dl_error_set1("dependency path too long in %s", abs);
+                return -1;
+            }
+            memcpy(dep, dir, dl); dep[dl] = '/'; memcpy(dep + dl + 1, name, nl + 1);
+        }
+        if (open_object(st, dep, group, global, depth + 1) < 0) return -1;
+    }
+    return idx;
+}
+
+/* Tear down everything a failed dlopen() mapped, so a broken object does not
+ * permanently consume the kernel's small anonymous-mapping budget. */
+static void unload_group(struct dl_state *st, int first) {
+    for (int i = first; i < st->count; i++) {
+        struct dl_object *o = &st->objs[i];
+        if (o->base) sys_munmap((unsigned long)o->base, o->total);
+        memset(o, 0, sizeof *o);
+    }
+    st->count = first;
+}
+
 void *dlopen(const char *path, int flags) {
-    (void)flags;
     dl_error = 0;
     struct dl_state *st = __pagh_dl_state;
     if (!st) { dl_error_set("no loader state (start the program with ld-pagh)"); return 0; }
     if (!path || !*path) { dl_error_set("dlopen: empty path"); return 0; }
-    for (int i = 0; i < st->count; i++)
-        if (st->objs[i].path && !strcmp(st->objs[i].path, path))
-            return &st->objs[i];
-    if (st->count >= DL_MAX_OBJECTS) { dl_error_set("too many loaded objects"); return 0; }
-    struct dl_object *o = &st->objs[st->count];
-    memset(o, 0, sizeof *o);
-    if (read_file(o, path) < 0) return 0;
-    if (load_object(o) < 0) return 0;
-    if (relocate(o, st, st->count) < 0) return 0;
-    if (protect_object(o) < 0) return 0;
-    st->count++;
-    call_inits(o);
-    return o;
+
+    int global = (flags & RTLD_GLOBAL) != 0;
+    int first = st->count;
+    int idx = open_object(st, path, first, global, 0);
+    if (idx < 0) { unload_group(st, first); return 0; }
+    if (idx < first) return &st->objs[idx];  /* already loaded: nothing to do */
+
+    for (int i = first; i < st->count; i++)
+        if (relocate(&st->objs[i], st, i) < 0) { unload_group(st, first); return 0; }
+    for (int i = first; i < st->count; i++)
+        if (protect_object(&st->objs[i]) < 0) { unload_group(st, first); return 0; }
+    /* Dependencies first, the object that pulled them in last. */
+    for (int i = st->count - 1; i >= first; i--) call_inits(&st->objs[i]);
+    return &st->objs[idx];
 }
 
 void *dlsym(void *handle, const char *name) {
@@ -440,11 +589,36 @@ void *dlsym(void *handle, const char *name) {
     struct dl_state *st = __pagh_dl_state;
     if (!st) { dl_error_set("no loader state (start the program with ld-pagh)"); return 0; }
     if (!name || !*name) { dl_error_set("dlsym: empty name"); return 0; }
+
+    if (handle == RTLD_DEFAULT) {
+        unsigned long addr = resolve_global(st, name);
+        if (!addr) { dl_error_set1("undefined symbol %s", name); return 0; }
+        return (void *)addr;
+    }
+    if (handle == RTLD_NEXT) {
+        /* The caller's object is identified from this function's return
+         * address.  dlsym() makes calls, so the compiler has spilled ra. */
+        void *ra = __builtin_extract_return_addr(__builtin_return_address(0));
+        int from = object_containing(st, ra);
+        if (from < 0) {
+            dl_error_set("dlsym(RTLD_NEXT): caller is not a loaded object");
+            return 0;
+        }
+        unsigned long addr = resolve_next(st, from, name);
+        if (!addr) { dl_error_set1("undefined symbol %s", name); return 0; }
+        return (void *)addr;
+    }
+
     int idx = object_index(st, handle);
     if (idx < 0) { dl_error_set("dlsym: invalid handle"); return 0; }
-    unsigned long addr = resolve_in(&st->objs[idx], name);
-    if (!addr) { dl_error_set1("undefined symbol %s", name); return 0; }
-    return (void *)addr;
+    int group = st->objs[idx].group;
+    for (int i = 0; i < st->count; i++) {
+        if (st->objs[i].group != group) continue;
+        unsigned long addr = resolve_in(&st->objs[i], name);
+        if (addr) return (void *)addr;
+    }
+    dl_error_set1("undefined symbol %s", name);
+    return 0;
 }
 
 int dlclose(void *handle) {
@@ -468,39 +642,20 @@ int __pagh_dl_run(int argc, char **argv, char **envp) {
     __pagh_dl_state = st;
     dl_error = 0;
 
+    /* Group 0 is the program: it and its DT_NEEDED tree go into the global
+     * scope, exactly like the main executable of a real dynamic link. */
+    if (open_object(st, argv[0], 0, 1, 0) != 0) goto fail;
     struct dl_object *exe = &st->objs[0];
-    if (read_file(exe, argv[0]) < 0 || load_object(exe) < 0) goto fail;
-    st->count = 1;
-
-    char dir[256];
-    if (file_dir(argv[0], dir, sizeof dir) < 0) { dl_error_set("program path too long"); goto fail; }
-
-    unsigned long needed[DL_MAX_DEPS];
-    int nneeded = 0;
-    if (collect_needed(exe, needed, DL_MAX_DEPS, &nneeded) < 0) goto fail;
-    unsigned long strtab = dyn_value(exe, DT_STRTAB);
-    for (int i = 0; i < nneeded; i++) {
-        const char *name = needed_name(exe, strtab, needed[i]);
-        if (!name) { dl_error_set("bad DT_NEEDED string"); goto fail; }
-        char path[512];
-        unsigned long dl = strlen(dir), nl = strlen(name);
-        if (dl + 1 + nl + 1 > sizeof path) { dl_error_set("dependency path too long"); goto fail; }
-        memcpy(path, dir, dl); path[dl] = '/'; memcpy(path + dl + 1, name, nl + 1);
-        if (st->count >= DL_MAX_OBJECTS) { dl_error_set("too many loaded objects"); goto fail; }
-        struct dl_object *dep = &st->objs[st->count];
-        if (read_file(dep, path) < 0 || load_object(dep) < 0) goto fail;
-        st->count++;
-    }
 
     for (int i = 0; i < st->count; i++)
-        if (relocate(&st->objs[i], st, st->count) < 0) goto fail;
+        if (relocate(&st->objs[i], st, i) < 0) goto fail;
     for (int i = 0; i < st->count; i++)
         if (protect_object(&st->objs[i]) < 0) goto fail;
 
     /* Publish this table into whichever loaded object exports the variable
      * (libpagh-c.so in a dynamically linked program).  Doing it before the
      * constructors means a constructor may legally call dlopen. */
-    struct dl_state **slot = (struct dl_state **)resolve(st, st->count, "__pagh_dl_state");
+    struct dl_state **slot = (struct dl_state **)resolve_global(st, "__pagh_dl_state");
     if (slot) *slot = st;
 
     for (int i = st->count - 1; i >= 0; i--) call_inits(&st->objs[i]);
