@@ -25,4 +25,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int puts(const char *s);
 int putchar(int c);
 int getchar(void);
+/* `s` may be NULL; both write "<s>: <errno text>\n" (or just the text) to
+ * stderr and return nothing, like every other small libc. */
+void perror(const char *s);
 #endif

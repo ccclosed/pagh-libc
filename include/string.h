@@ -11,6 +11,9 @@ char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 char *strstr(const char *h, const char *n);
 char *strdup(const char *s);
+/* Text for an errno value from <errno.h>; "unknown error" for anything else.
+ * The returned string is static. */
+const char *strerror(int err);
 void *memcpy(void *d, const void *s, size_t n);
 void *memmove(void *d, const void *s, size_t n);
 void *memset(void *d, int c, size_t n);

@@ -32,6 +32,19 @@
 #define SYS_WAIT4 260
 #define SYS_GETPPID 173
 
+/* BSD sockets (kernel >= 0.17.0 UDP, >= 0.18.0 listen/accept). 206/207 carry
+ * the full sendto/recvfrom shape; send/recv are libc wrappers around them. */
+#define SYS_SOCKET 198
+#define SYS_BIND 200
+#define SYS_LISTEN 201
+#define SYS_ACCEPT 202
+#define SYS_CONNECT 203
+#define SYS_SENDTO 206
+#define SYS_RECVFROM 207
+#define SYS_SETSOCKOPT 208
+#define SYS_GETSOCKOPT 209
+#define SYS_SHUTDOWN 210
+
 #define AT_FDCWD (-100)
 #define AT_REMOVEDIR 0x200
 
