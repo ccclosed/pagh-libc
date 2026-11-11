@@ -448,7 +448,7 @@ What it shows, per feature (exact lines from the transcript):
 | UDP echo | `udp_echo: bound 0.0.0.0:45678` and three `sent`/`recv` pairs / `udp_echo: ok (3 datagrams echoed)` |
 | DNS over a host server | `dns: gethostbyname echo.pagh.test -> 203.0.113.7 (type=2 len=4)` / `dns: getaddrinfo echo.pagh.test http -> 203.0.113.7:80 family=2 socktype=1 addrlen=16` |
 | DNS negative | `dns: nx.pagh.test: FAILED: host not found (h_errno=1)` (the server answered NXDOMAIN) |
-| DNS over the DHCP server | `dns: server 10.0.2.3:53 (from /mnt/etc/resolv.conf)` / `dns: gethostbyname example.com -> 8.6.112.0` |
+| DNS over the DHCP server | `dns: server 10.0.2.3:53 (from /mnt/etc/resolv.conf)` / `dns: gethostbyname example.com -> 8.47.69.0` |
 | `%f`/`%e`/`%g` + FPU | `float: %.20f    0.10000000000000000555 -> 0.10000000000000000555   ok` / `float: 355/113 = 3.141593` / `float: ok (22 formatted values + FPU arithmetic)` |
 | dlopen regression | the full 0.10.0 line set, ending `dlopen: RTLD_GLOBAL promotes an already-loaded group` / `run: /mnt/ld-pagh exited with code 0` |
 | threads / signals / files | `counter=8 ret=50/30`, `hits=1`, `line one` + `line two`, `counter=1000`, `ready=1 seen=1`, `cwd=/mnt`, `relative read=hello libc`, all `exited with code 0` |
@@ -461,9 +461,13 @@ PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
 
 The committed transcript was captured with `qemu-system-riscv64` 10.2.2, xPack
 GCC 15.2.0-1 and rust-lld from nightly-2026-07-12, against pagh-riscv revision
-`fc19a17` (crate 0.20.0, the demand-grown-stack release), kernel SHA-256
-`3f4af143a4014acc35b87240977999da4dc4a99ed153a963af4b428643ce119f` — a scratch
-`cargo build --release --locked` of that commit, so the kernel tree is untouched
-(the header of the transcript carries these values). The script also runs green
-against 0.19.0; earlier live socket transcripts on 0.17.0/0.18.0 live in the
-kernel repository's `docs/live-udp.txt` and `docs/live-tcp-server.txt`.
+`adae144` (crate 0.21.0, tag `0.21.0`), kernel SHA-256
+`d5caba232a121a2f241be986d661dcdc2e4056226e87658a99d5a7886bf86fdf` — a scratch
+`cargo build --release --locked` of that commit in a throwaway clone, so the
+kernel tree is untouched (the header of the transcript carries these values,
+including the pagh-libc revision `27785e0` and the fact that the tree was clean).
+`docs/live-tls.txt` was regenerated the same way from the same commit; its header
+also records the OpenSSL version the negative chain-gate server ran. The script
+also runs green against 0.19.0; earlier live socket transcripts on
+0.17.0/0.18.0 live in the kernel repository's `docs/live-udp.txt` and
+`docs/live-tcp-server.txt`.
