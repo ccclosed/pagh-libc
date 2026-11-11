@@ -1,0 +1,76 @@
+name: ci
+
+# The two gates this repository documents in its README:
+#
+#   ./tools/host-tests.sh   host-only differential tests (printf, DNS, HTTP)
+#   ./build.sh              the cross build of the library + every example
+#
+# The cross build needs two pinned tools: the xPack RISC-V GCC the README names
+# (`CROSS=.../riscv-none-elf-`), and rust-lld from the same nightly the kernel
+# and pagh-api pin. The build is warnings-as-errors here so the "warning-free"
+# property cannot silently rot again (before this workflow the link step emitted
+# an RWX-segment warning for every example).
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      XPACK_VERSION: "15.2.0-1"
+      # sha256 of xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz, checked
+      # before the tarball is unpacked.
+      XPACK_SHA256: aaaa8060c914851a3e5ee1ba82cc3d6f80972f90638a05c6e823a37557a33758
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tests (printf differential, DNS messages, HTTP framing)
+        run: ./tools/host-tests.sh
+
+      - name: Install rust-lld from the pinned nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-12
+
+      - name: Install the pinned RISC-V toolchain
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xpack.tar.gz" \
+            "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v${XPACK_VERSION}/xpack-riscv-none-elf-gcc-${XPACK_VERSION}-linux-x64.tar.gz"
+          echo "${XPACK_SHA256}  ${RUNNER_TEMP}/xpack.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/xpack.tar.gz" -C "$RUNNER_TEMP"
+          echo "CROSS=${RUNNER_TEMP}/xpack-riscv-none-elf-gcc-${XPACK_VERSION}/bin/riscv-none-elf-" >> "$GITHUB_ENV"
+
+      - name: Cross build, with warnings as errors
+        run: |
+          LLD="$(find "$HOME/.rustup" -name rust-lld | head -1)" ./build.sh 2>&1 | tee build.log
+          if grep -q 'warning:' build.log; then
+            echo "::error::the build emitted warnings:"
+            grep 'warning:' build.log
+            exit 1
+          fi
+
+      - name: Check the two-segment ELF layout the kernel loader expects
+        run: |
+          headers="$("${CROSS}"readelf -lW build/hello.elf)"
+          printf '%s\n' "$headers"
+          test "$(printf '%s\n' "$headers" | grep -c '^  LOAD')" = 2
+          printf '%s\n' "$headers" | grep -E '^  LOAD .*R E 0x1000$'
+          printf '%s\n' "$headers" | grep -E '^  LOAD .*RW  0x1000$'
+          if printf '%s\n' "$headers" | grep -q 'RWE'; then
+            echo "::error::an RWX PT_LOAD segment reappeared"
+            exit 1
+          fi
+
+      - name: Upload the built ELFs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore

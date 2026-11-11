@@ -76,7 +76,9 @@ int pthread_attr_init(pthread_attr_t *attr) {
     attr->detachstate = 0; attr->stacksize = 64 * 1024; return 0;
 }
 int pthread_attr_setstacksize(pthread_attr_t *attr, size_t size) {
-    if (!attr) return -1; attr->stacksize = size; return 0;
+    if (!attr) return -1;
+    attr->stacksize = size;
+    return 0;
 }
 int pthread_attr_destroy(pthread_attr_t *attr) { (void)attr; return 0; }
 

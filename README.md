@@ -38,6 +38,14 @@ static `build/ld-pagh.elf`, and the shared objects `libextra.so`,
 `libpagh-c.so`, `libplug.so` (which `DT_NEEDED`s `libplugdep.so`),
 `libglobal.so`, `liblate.so`, `liblatebad.so` and `libbadreloc.so`.
 
+`link.ld` mirrors the kernel's own `pagh-riscv/userland/user.ld`: `.text` and
+`.rodata` form the read+execute `PT_LOAD`, `.data` and `.bss` the read+write
+one, so the kernel's ELF loader maps exactly the two-segment shape its own user
+land images use (and no RWX segment is emitted). The build is warning-free, and
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs `tools/host-tests.sh`
+plus this cross build, with warnings treated as errors, on every push and pull
+request.
+
 ## Run in QEMU
 
 ```sh
