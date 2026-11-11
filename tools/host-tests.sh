@@ -1,11 +1,14 @@
 #!/bin/sh
 # Host tests: run the pure library code on the build host, against the host's
-# libc (differential printf) and against hand-built DNS messages.
+# libc (differential printf) and against hand-built DNS and HTTP messages, plus
+# a table check that every errno the header defines has a strerror() text.
 #
 #   ./tools/host-tests.sh
 #
 # These are not a substitute for the live QEMU run; they are the inner loop that
-# makes claims about formatting and parsing checkable in a second. Note the
+# makes claims about formatting and parsing checkable in a second. The errno
+# table check needs python3 (only that one; the rest is the host C compiler).
+# Note the
 # separate compilations below: the *library* sources are renamed on their own,
 # so the test translation unit keeps calling the real host `snprintf`. Folding
 # both into one command line would rename the host function too and turn the
@@ -31,5 +34,8 @@ $CC -O2 -Iinclude tests/dns_test.c src/dns.c -o build/host_dns_test
 echo "== HTTP framing test (head parse, chunked decode, refusal cases) =="
 $CC -O2 -Iinclude tests/http_test.c src/http.c -o build/host_http_test
 ./build/host_http_test
+
+echo "== errno table check (include/errno.h vs src/strerror.c) =="
+python3 tools/check_errno.py
 
 echo "host-tests: PASS"
