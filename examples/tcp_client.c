@@ -1,5 +1,8 @@
 /* A TCP client on the native pagh ABI: socket -> connect -> getsockopt(SO_ERROR)
- * -> send -> recv -> shutdown -> close.
+ * -> send -> poll -> recv -> shutdown -> close.
+ *
+ * TCP `recv` is non-blocking on this ABI (-EAGAIN means "poll again"), so the
+ * echo wait below sleeps in poll(2) on the socket instead of a usleep loop.
  *
  *   run /mnt/tcp_client <host> <port> [message]
  *
@@ -10,6 +13,7 @@
  * on the host is what the guest connects to in tools/live-sockets.py. */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,12 +73,19 @@ int main(int argc, char **argv) {
     size_t got = 0;
     long deadline = now_ms() + RECV_TIMEOUT_MS;
     while (got < sizeof echo - 1) {
+        long left = deadline - now_ms();
+        if (left <= 0) { printf("tcp_client: recv timeout\n"); return 1; }
+        struct pollfd p;
+        p.fd = fd;
+        p.events = POLLIN;
+        p.revents = 0;
+        int ready = poll(&p, 1, (int)left);
+        if (ready < 0) { perror("tcp_client: poll"); return 1; }
+        if (ready == 0) { printf("tcp_client: recv timeout\n"); return 1; }
         long r = recv(fd, echo + got, sizeof echo - 1 - got, 0);
         if (r > 0) { got += (size_t)r; if (got >= want) break; continue; }
         if (r == 0) break;
         if (errno != EAGAIN) { perror("tcp_client: recv"); return 1; }
-        if (now_ms() > deadline) { printf("tcp_client: recv timeout\n"); return 1; }
-        usleep(2000);
     }
     echo[got] = 0;
     printf("tcp_client: echo %lu bytes: %s\n", (unsigned long)got, echo);

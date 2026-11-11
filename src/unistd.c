@@ -23,6 +23,23 @@ int open(const char *path, int flags, ...) {
     return (int)ret(__pagh_syscall6(SYS_OPENAT, AT_FDCWD, (long)abs, flags, mode, 0, 0));
 }
 int close(int fd) { return (int)ret(__pagh_syscall3(SYS_CLOSE, fd, 0, 0)); }
+/* dup/dup2 keep the kernel's descriptor rules: dup2(oldfd, oldfd) is a
+ * successful no-op, dup2's third argument (flags) must be 0, and both report
+ * failures through errno. */
+int dup(int fd) {
+    return (int)ret(__pagh_syscall3(SYS_DUP, fd, 0, 0));
+}
+int dup2(int oldfd, int newfd) {
+    return (int)ret(__pagh_syscall6(SYS_DUP2, oldfd, newfd, 0, 0, 0, 0));
+}
+/* pipe2's flags must be 0 on this ABI; a non-zero `flags` is -EINVAL from the
+ * kernel, not silently ignored. */
+int pipe2(int fds[2], int flags) {
+    return (int)ret(__pagh_syscall6(SYS_PIPE2, (long)fds, flags, 0, 0, 0, 0));
+}
+int pipe(int fds[2]) {
+    return pipe2(fds, 0);
+}
 long lseek(int fd, long off, int whence) {
     return ret(__pagh_syscall6(SYS_LSEEK, fd, off, whence, 0, 0, 0));
 }
@@ -73,5 +90,11 @@ void __run_atexit(void);
  * `__run_atexit` drains the list, so the double call is harmless), then exits
  * the process. Calling exit() used to skip the handlers entirely. */
 void _exit(int code) { __pagh_syscall3(SYS_EXIT_GROUP, code, 0, 0); for (;;) {} }
+/* set_tid_address records the clear-child-tid address for this thread and
+ * returns its tid. The kernel documents that it does not clear the word on
+ * exit, so the wrapper promises nothing beyond that. */
+int set_tid_address(int *tidptr) {
+    return (int)ret(__pagh_syscall3(SYS_SET_TID_ADDRESS, (long)tidptr, 0, 0));
+}
 void exit(int code) { __run_atexit(); _exit(code); }
 long sysconf(int name) { (void)name; return 4096; }

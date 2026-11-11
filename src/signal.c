@@ -49,6 +49,14 @@ int kill(int pid, int sig) {
 }
 int sigemptyset(sigset_t *set) { if (!set) return -1; *set = 0; return 0; }
 int sigaddset(sigset_t *set, int sig) { if (!set || sig < 1 || sig > 31) return -1; *set |= 1UL << (sig - 1); return 0; }
+/* The 24-byte kernel sigaltstack shape (stack_t in <signal.h>): a new stack
+ * must be >= 4 KiB and fully mapped, SS_DISABLE removes it, and the old
+ * disposition is written before the new one is installed. */
+int sigaltstack(const stack_t *ss, stack_t *old_ss) {
+    long r = __pagh_syscall6(SYS_SIGALTSTACK, (long)ss, (long)old_ss, 0, 0, 0, 0);
+    if (r < 0) { errno = (int)-r; return -1; }
+    return 0;
+}
 int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     long r = __pagh_syscall6(SYS_RT_SIGPROCMASK, how, (long)set, (long)oldset, 8, 0, 0);
     if (r < 0) { errno = (int)-r; return -1; }
