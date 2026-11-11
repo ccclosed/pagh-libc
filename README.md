@@ -64,7 +64,7 @@ sockets, DNS and `%f`, with host peers (see *Live evidence* below).
 
 | Area | Provided |
 |---|---|
-| start/exit | `_start`, `exit`, `atexit` (LIFO), `abort` |
+| start/exit | `_start`, `exit`/`_exit` (whole process via `exit_group(94)`, POSIX semantics), `atexit` (LIFO), `abort` |
 | syscalls | `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit sched_yield getpid`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
 | memory | `malloc/calloc/realloc/free` (bump `brk`, `free` no-op), `memcpy/memset/memmove/memcmp` |
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strerror`; `perror` in stdio |
@@ -76,7 +76,7 @@ sockets, DNS and `%f`, with host peers (see *Live evidence* below).
 | env | `getenv/setenv/unsetenv` (mutable layer over the kernel frame) |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `clock_gettime`, `time`, `nanosleep` |
-| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
+| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds, 64 KiB stack); `pthread_exit` ends only the calling thread (93), while `exit`/`_exit`/`abort` end the process (94) |
 | signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
 | cwd | `chdir/getcwd` process-local (the ABI has no chdir); relative `open/stat/...` resolve against it |
 | dynamic | `ld-pagh` maps ET_DYN executables and their `DT_NEEDED` tree (recursively, up to 16 objects); `dlopen/dlsym/dlclose/dlerror` add, scope and resolve objects at runtime (`RTLD_GLOBAL`/`RTLD_LOCAL`, `RTLD_DEFAULT`/`RTLD_NEXT`); `DT_INIT`/`DT_INIT_ARRAY` run |

@@ -19,7 +19,8 @@
 #define SYS_READLINKAT 78
 #define SYS_GETPID 172
 #define SYS_SCHED_YIELD 124
-#define SYS_EXIT 93
+#define SYS_EXIT 93        /* exit the calling thread only        */
+#define SYS_EXIT_GROUP 94  /* exit every thread (POSIX exit/_exit) */
 #define SYS_MKDIRAT 34
 #define SYS_UNLINKAT 35
 #define SYS_SYMLINKAT 36
