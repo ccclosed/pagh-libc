@@ -3,7 +3,8 @@ name: ci
 # The two gates this repository documents in its README:
 #
 #   ./tools/host-tests.sh   host-only differential tests (printf, getopt,
-#                           libc helpers, getline; DNS/HTTP framing; errno)
+#                           libc helpers, getline, time/strftime; DNS/HTTP
+#                           framing; errno)
 #   ./build.sh              the cross build of the library + every example
 #
 # The cross build needs two pinned tools: the xPack RISC-V GCC the README names
@@ -31,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Host tests (printf/getopt differential, libc helpers, DNS/HTTP)
+      - name: Host tests (printf/getopt/time differential, libc helpers, DNS/HTTP)
         run: ./tools/host-tests.sh
 
       - name: Install rust-lld from the pinned nightly

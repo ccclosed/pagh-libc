@@ -1,9 +1,9 @@
 #!/bin/sh
 # Host tests: run the pure library code on the build host, against the host's
-# libc (differential printf, getopt family, bsearch/tokenizers/memchr) and
-# against hand-built DNS and HTTP messages, plus a synthetic-stream test for
-# getline/getdelim and a table check that every errno the header defines has a
-# strerror() text.
+# libc (differential printf, getopt family, bsearch/tokenizers/memchr,
+# time/gmtime_r/localtime_r/strftime) and against hand-built DNS and HTTP
+# messages, plus a synthetic-stream test for getline/getdelim and a table check
+# that every errno the header defines has a strerror() text.
 #
 #   ./tools/host-tests.sh
 #
@@ -72,6 +72,20 @@ $CC -O2 -Iinclude -Dgetline=pagh_getline -Dgetdelim=pagh_getdelim \
 $CC -O2 -Iinclude -Dgetline=pagh_getline -Dgetdelim=pagh_getdelim \
     tests/getline_test.c build/host_getline.o -o build/host_getline_test
 ./build/host_getline_test
+
+echo "== time differential test (clock/time/gettimeofday, gmtime_r/localtime_r, strftime) =="
+TIME_RENAMES="-Dclock_gettime=pagh_clock_gettime -Dnanosleep=pagh_nanosleep \
+    -Dtime=pagh_time -Dsleep=pagh_sleep -Dusleep=pagh_usleep \
+    -Dgettimeofday=pagh_gettimeofday -Dgmtime_r=pagh_gmtime_r \
+    -Dlocaltime_r=pagh_localtime_r -Dgmtime=pagh_gmtime \
+    -Dlocaltime=pagh_localtime -Dstrftime=pagh_strftime"
+$CC -O2 -Iinclude $TIME_RENAMES -c src/time.c -o build/host_time.o
+# glibc's errno is thread-local; the library sources use a plain int. This
+# one-definition shim is compiled without headers so `errno` is not a macro.
+$CC -O2 -c tests/host_errno_shim.c -o build/host_errno_shim.o
+$CC -O2 tests/time_test.c build/host_time.o build/host_errno_shim.o \
+    -o build/host_time_test
+./build/host_time_test
 
 echo "== errno table check (include/errno.h vs src/strerror.c) =="
 python3 tools/check_errno.py
