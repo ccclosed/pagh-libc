@@ -308,6 +308,11 @@ static void long_cases(void) {
         char *v[] = ARGV("--delta");
         flag_word = 0;
         run_long("flag", 2, v, "a", LONGOPTS, 1);
+        checks++;
+        if (flag_word != 42) {
+            failures++;
+            printf("MISMATCH flag pointer: expected 42, got %d\n", flag_word);
+        }
     }
     {   /* no argument allowed but '=' given: '?' */
         char *v[] = ARGV("--alpha=1");
@@ -435,11 +440,6 @@ static void fuzz_long(int rounds) {
     }
 }
 
-static int flag_value_for(int *flag_word_snapshot) {
-    (void)flag_word_snapshot;
-    return flag_word;
-}
-
 int main(void) {
     short_cases();
     long_cases();
@@ -447,13 +447,6 @@ int main(void) {
     fuzz_short(400);
     fuzz_long(400);
 
-    /* The flag-pointer case: both parsers must have written 42. The last
-     * flag test leaves the variable at 42 unless a bug skipped the store. */
-    checks++;
-    if (flag_word != 42) {
-        failures++;
-        printf("MISMATCH flag pointer: expected 42, got %d\n", flag_value_for(NULL));
-    }
     if (failures) {
         printf("getopt diff: %d checks, %d FAILURES\n", checks, failures);
         return 1;
