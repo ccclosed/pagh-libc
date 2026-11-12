@@ -13,7 +13,8 @@ int strncmp(const char *a, const char *b, size_t n) {
 char *strcpy(char *d, const char *s) { char *r = d; while ((*d++ = *s++)) {} return r; }
 char *strncpy(char *d, const char *s, size_t n) {
     char *r = d; while (n && (*d = *s)) { d++; s++; n--; }
-    while (n--) *d++ = 0; return r;
+    while (n--) *d++ = 0;
+    return r;
 }
 char *strcat(char *d, const char *s) { strcpy(d + strlen(d), s); return d; }
 char *strchr(const char *s, int c) {

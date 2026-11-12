@@ -16,9 +16,9 @@ struct PaghFile {
     size_t len;
 };
 
-static struct PaghFile _stdin = { 0, 1, 0, 0, {0}, 0, 0 };
-static struct PaghFile _stdout = { 1, 0, 1, 0, {0}, 0, 0 };
-static struct PaghFile _stderr = { 2, 0, 1, 0, {0}, 0, 0 };
+static struct PaghFile _stdin = { .fd = 0, .readable = 1, .buf = {0} };
+static struct PaghFile _stdout = { .fd = 1, .writable = 1, .buf = {0} };
+static struct PaghFile _stderr = { .fd = 2, .writable = 1, .buf = {0} };
 FILE *stdin = &_stdin;
 FILE *stdout = &_stdout;
 FILE *stderr = &_stderr;
