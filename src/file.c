@@ -123,6 +123,9 @@ int fgetc(FILE *f) {
     unsigned char ch;
     return fread(&ch, 1, 1, f) == 1 ? ch : EOF;
 }
+int feof(FILE *f) { return f ? f->eof : 0; }
+int ferror(FILE *f) { return f ? f->error : 0; }
+void clearerr(FILE *f) { if (f) { f->eof = 0; f->error = 0; } }
 int fputs(const char *s, FILE *f) {
     size_t n = strlen(s);
     return fwrite(s, 1, n, f) == n ? 0 : EOF;

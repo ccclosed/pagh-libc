@@ -8,9 +8,12 @@
  *   ./build/host_posix_abi_test
  */
 #include <stddef.h>
+#include <getopt.h>
 #include <signal.h>
 #include <poll.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -49,6 +52,14 @@ CHECK(POLLNVAL == 0x20);
 CHECK(SS_ONSTACK == 1);
 CHECK(SS_DISABLE == 2);
 
+/* struct option: four fields, in this order, and the has_arg constants. */
+CHECK(sizeof(struct option) == 3 * sizeof(void *) + 2 * sizeof(int));
+CHECK(offsetof(struct option, name) == 0);
+CHECK(offsetof(struct option, has_arg) == sizeof(void *));
+CHECK(no_argument == 0);
+CHECK(required_argument == 1);
+CHECK(optional_argument == 2);
+
 /* And the signatures, so a header edit that drops or changes a prototype
  * cannot compile this test. */
 static int (*const poll_fn)(struct pollfd *, nfds_t, int) = poll;
@@ -60,6 +71,14 @@ static int (*const pipe_fn)(int[2]) = pipe;
 static int (*const pipe2_fn)(int[2], int) = pipe2;
 static int (*const sigaltstack_fn)(const stack_t *, stack_t *) = sigaltstack;
 static int (*const set_tid_address_fn)(int *) = set_tid_address;
+static int (*const getopt_fn)(int, char *const[], const char *) = getopt;
+static int (*const getopt_long_fn)(int, char *const[], const char *,
+                                   const struct option *, int *) = getopt_long;
+static void *(*const bsearch_fn)(const void *, const void *, size_t, size_t,
+                                 int (*)(const void *, const void *)) = bsearch;
+static char *(*const strtok_r_fn)(char *, const char *, char **) = strtok_r;
+static char *(*const strsep_fn)(char **, const char *) = strsep;
+static void *(*const memchr_fn)(const void *, int, size_t) = memchr;
 
 int main(void) {
     /* Keep the prototype checks "used" without calling anything. */
@@ -67,10 +86,14 @@ int main(void) {
         (const void *)&poll_fn, (const void *)&ppoll_fn, (const void *)&dup_fn,
         (const void *)&dup2_fn, (const void *)&pipe_fn, (const void *)&pipe2_fn,
         (const void *)&sigaltstack_fn, (const void *)&set_tid_address_fn,
+        (const void *)&getopt_fn, (const void *)&getopt_long_fn,
+        (const void *)&bsearch_fn, (const void *)&strtok_r_fn,
+        (const void *)&strsep_fn, (const void *)&memchr_fn,
     };
     (void)checked;
-    printf("posix wrappers: ok (pollfd %d B, stack_t %d B, sigaction %d B, 8 prototypes)\n",
+    printf("posix wrappers: ok (pollfd %d B, stack_t %d B, sigaction %d B, "
+           "option %d B, 14 prototypes)\n",
            (int)sizeof(struct pollfd), (int)sizeof(stack_t),
-           (int)sizeof(struct sigaction));
+           (int)sizeof(struct sigaction), (int)sizeof(struct option));
     return 0;
 }

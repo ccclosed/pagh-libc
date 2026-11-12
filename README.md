@@ -18,9 +18,14 @@ formatting, and `strerror`/`perror`. **0.12.0** adds userland TLS 1.3 over
 kernel 0.21: `getrandom` and the `pagh_tls_*` wrappers over syscalls 1100-1103
 (`tls_connect`/`tls_write`/`tls_read`/`tls_close`), plus `https_get`. The
 handshake is the kernel's, and so is the trust decision: the wrappers expose no
-flag that could relax certificate verification.
+flag that could relax certificate verification. **0.13.0** adds the command-line
+and string helpers a ported program expects: `getopt`/`getopt_long`/
+`getopt_long_only` (permutation, long-option abbreviations, `--`, `:`-style
+errors), `bsearch`, the reentrant `strtok_r`/`strsep` with their `strspn`/
+`strcspn` primitives, `memchr`, and `getline`/`getdelim` with `feof`/`ferror`/
+`clearerr`.
 
-Version **0.12.0** (`VERSION`, tag `v0.12.0`).
+Version **0.13.0** (`VERSION`, tag `v0.13.0`).
 
 ## Build the toolchain
 
@@ -62,11 +67,13 @@ run /mnt/tcp_client 10.0.2.2 9050  # + a host echo server on 127.0.0.1:9050
 run /mnt/udp_echo 10.0.2.2 9050 3  # + a host UDP echo server
 run /mnt/dns_lookup example.com    # over /etc/resolv.conf (or @A.B.C.D[:port])
 run /mnt/float_printf              # %f/%e/%g and FPU arithmetic
+run /mnt/getline                   # getline/getdelim on a real ext2 file
 ```
 
 `tools/live-dlopen.sh` builds the disk and drives the dlopen test through a
 pagh-riscv checkout's `tools/run.py`; `tools/live-sockets.py` does the same for
-sockets, DNS and `%f`, with host peers (see *Live evidence* below).
+sockets, DNS and `%f`, with host peers, and `tools/live-getline.py` for the
+getline/getdelim file round-trip (see *Live evidence* below).
 
 ## Status
 
@@ -75,8 +82,10 @@ sockets, DNS and `%f`, with host peers (see *Live evidence* below).
 | start/exit | `_start`, `exit`/`_exit` (whole process via `exit_group(94)`, POSIX semantics), `atexit` (LIFO), `abort` |
 | syscalls | every number in the kernel's ABI table (`docs/abi.md` §2 in pagh-riscv) has a wrapper: `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit exit_group sched_yield getpid poll ppoll dup dup2 pipe2 sigaltstack set_tid_address`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
 | memory | `malloc/calloc/realloc/free` (bump `brk`, `free` no-op), `memcpy/memset/memmove/memcmp` |
-| strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strerror`; `perror` in stdio |
-| stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering; **`%f %e %g`** (exact IEEE-754 digits, half-even rounding), flags `- + space # 0`, `*` and `l/ll/h/hh/z` |
+| strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strtok_r`/`strsep` (+ `strspn`/`strcspn`), `strerror`; `perror` in stdio |
+| stdlib | `malloc/calloc/realloc/free`, `qsort`, `bsearch`, `atoi/atol/abs`, `atexit`/`exit`/`abort` |
+| cli | `include/getopt.h`: `getopt`, `getopt_long`, `getopt_long_only`, `struct option`, `no_argument`/`required_argument`/`optional_argument`, the `optarg`/`optind`/`opterr`/`optopt` globals; argv permutation, `+`/`-`/`:` prefixes, `--` terminator and long-option abbreviations behave like the host libc's |
+| stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering, `getline`/`getdelim`, `feof`/`ferror`/`clearerr`; **`%f %e %g`** (exact IEEE-754 digits, half-even rounding), flags `- + space # 0`, `*` and `l/ll/h/hh/z` |
 | sockets | `include/sys/socket.h`: `socket/bind/listen/accept/connect/send/sendto/recv/recvfrom/setsockopt/getsockopt/shutdown`, `struct sockaddr_in`, `AF_INET`, `SOCK_STREAM`, `SOCK_DGRAM`, `SOCK_NONBLOCK`, `MSG_DONTWAIT`, `INADDR_ANY`; `htons/htonl/ntohs/ntohl`, `inet_aton/inet_addr/inet_ntoa/inet_pton/inet_ntop`; errors are the kernel's errno |
 | dns | `include/netdb.h`: `gethostbyname`, `getaddrinfo` (A only), `freeaddrinfo`, `gai_strerror`, `hstrerror`, `h_errno`; one A query over UDP to the DHCP server named in `resolv.conf` (plus `pagh_resolv_set_server`/`pagh_resolv_server`/`pagh_resolv_source`) |
 | tls | `include/pagh_tls.h`: `getrandom`, `pagh_tls_connect`/`pagh_tls_write`/`pagh_tls_read`/`pagh_tls_close` over kernel 1100-1103, `https_get`; the handshake and its fail-closed verification (CA-bundle chain, SAN, clock window, `CertificateVerify`) run in the kernel and cannot be disabled from userland |
@@ -99,7 +108,10 @@ kernel `chdir` (libc keeps a process-local cwd and rewrites relative paths).
 `malloc` is a bump allocator: `free` is a no-op, there is no per-thread heap and
 no locking, and `realloc` copies `size` bytes without knowing the old size.
 `FILE` has no locking. `pthread_join` only works for threads created through
-this libc (a 16-slot registry).
+this libc (a 16-slot registry). `getline` grows its buffer by allocating a
+larger one and copying, because `realloc` cannot learn the old size; the old
+buffer is not reclaimed (`free` is a no-op), so a line that outgrows the
+initial 120 bytes costs one dead allocation per doubling until exit.
 
 **Syscall coverage is complete.** Every syscall the kernel's ABI document lists
 (60 of them) has a C wrapper; the last seven — `poll`, `ppoll`, `dup`, `dup2`,
@@ -456,6 +468,15 @@ Earlier milestones' transcripts remain in `docs/live-dynamic*.txt` and
 
 ## Live evidence
 
+[`docs/live-getline.txt`](docs/live-getline.txt) is the committed transcript of
+one `tools/live-getline.py` run: an ext2 image with `build/getline.elf`, the
+guest program writing `/mnt/getline.txt` and reading it back with `getline`
+(empty line, 300-byte line that grows the buffer, final line without a
+newline), then `getdelim` with `;`. It ends with
+`getline: ok (5 getline lines, 3 getdelim tokens)` and
+`run: /mnt/getline exited with code 0`; the header records the kernel, libc and
+QEMU versions like the socket transcript does.
+
 [`docs/live-sockets.txt`](docs/live-sockets.txt) is the committed transcript of
 one `tools/live-sockets.py` run: an ext2 image built with `mke2fs -d`, the
 kernel booted twice through the checkout's own `tools/run.py` (once to read the
@@ -483,8 +504,9 @@ What it shows, per feature (exact lines from the transcript):
 
 ```sh
 ./build.sh                 # cross toolchain needed
-tools/host-tests.sh        # printf differential, DNS/HTTP + errno tables, host-only
+tools/host-tests.sh        # printf/getopt/libc differential + DNS/HTTP/errno, host-only
 PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
+PAGH_RISCV=../pagh-riscv python3 tools/live-getline.py
 ```
 
 The committed transcript was captured with `qemu-system-riscv64` 10.2.2, xPack

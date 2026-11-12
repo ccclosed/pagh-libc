@@ -12,6 +12,10 @@ int atoi(const char *s);
 long atol(const char *s);
 int abs(int x);
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
+/* Binary search of a sorted array; returns the matching element or NULL. The
+ * comparison function takes the key first and an array element second. */
+void *bsearch(const void *key, const void *base, size_t n, size_t size,
+              int (*cmp)(const void *, const void *));
 extern char **environ;
 char *getenv(const char *name);
 #endif
