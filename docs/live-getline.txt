@@ -2,7 +2,7 @@
 # kernel: /home/oleg/pagh-riscv/target/riscv64gc-unknown-none-elf/release/pagh
 # kernel checkout: /home/oleg/pagh-riscv (revision a0933ee (clean), crate 0.21.2)
 # kernel sha256: 9a0440dcf39c8278c351d9b71e88d2b9fbbf9b9058fa9b187987bcf0ef0a0479
-# pagh-libc revision: ab4a0c1 (clean)
+# pagh-libc revision: d1e1d6a (clean)
 # host: QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)
 # image: mke2fs -t ext2 -b 1024 -d <root with build/getline.elf as getline> disk.img
 # guest command: run /mnt/getline
@@ -81,8 +81,8 @@ timebase    10000000 Hz
 console     NS16550 @ 0x10000000
 pmm         62641/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
 sv39        on, satp=0x8000000000080b4d, identity 0x80000000..0x90000000 (RWX below 0x80b4d000, RW above), 65549 pages, 13 device
-rtc         goldfish @ 0x101000 - 2026-11-12 20:26:28 UTC
-rtc         raw 0x4b56b548 0x18e7660e 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+rtc         goldfish @ 0x101000 - 2026-11-12 20:28:17 UTC
+rtc         raw 0xaaa1f350 0x18e76627 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
 entropy     32 bytes from /chosen/rng-seed - TLS session keys available
 timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
 plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
