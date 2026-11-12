@@ -60,6 +60,18 @@ int truncate(const char *path, long len) {
     return r;
 }
 int getpid(void) { return (int)__pagh_syscall3(SYS_GETPID, 0, 0, 0); }
-void _exit(int code) { __pagh_syscall3(SYS_EXIT, code, 0, 0); for (;;) {} }
-void exit(int code) { _exit(code); }
+void __run_atexit(void);
+
+/* POSIX `_exit` ends the *process*, not just the calling thread: with a live
+ * pthread, SYS_EXIT (93) would leave the other threads holding the run open
+ * (the kernel ends it only when the last thread exits), so the shell's `run`
+ * would never return. SYS_EXIT_GROUP (94) is the ABI's whole-run call.
+ * `pthread_exit` and the created-thread trampoline keep SYS_EXIT on purpose.
+ *
+ * `exit` is the POSIX one: it runs the LIFO atexit handlers first (crto does
+ * the same before it calls `exit` for a program whose main returns, and
+ * `__run_atexit` drains the list, so the double call is harmless), then exits
+ * the process. Calling exit() used to skip the handlers entirely. */
+void _exit(int code) { __pagh_syscall3(SYS_EXIT_GROUP, code, 0, 0); for (;;) {} }
+void exit(int code) { __run_atexit(); _exit(code); }
 long sysconf(int name) { (void)name; return 4096; }

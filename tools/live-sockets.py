@@ -463,6 +463,10 @@ REGRESSION = [
     ("ls", "ls", "run /mnt/ls /mnt", ["hello.txt"]),
     ("cat", "cat", "run /mnt/cat /mnt/hello.txt", ["hello libc"]),
     ("dlopen", "ld-pagh", "run /mnt/ld-pagh /mnt/hello_dyn", ["dlopen: plug_value=42"]),
+    # Process exit: exit() must run the atexit handlers and end the whole run
+    # even though a worker thread is still alive (SYS_EXIT_GROUP, not SYS_EXIT).
+    ("exit_semantics", "exit_semantics", "run /mnt/exit_semantics",
+     ["exit_semantics: atexit handler ran"]),
 ]
 
 

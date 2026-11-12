@@ -6,7 +6,11 @@
 extern int errno;
 #define EPERM 1
 #define ENOENT 2
+#define ESRCH 3
 #define EINTR 4
+#define E2BIG 7
+#define ENOEXEC 8
+#define ECHILD 10
 #define EIO 5
 #define EBADF 9
 #define EAGAIN 11

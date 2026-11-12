@@ -10,12 +10,15 @@ small, auditable C runtime for a hobby OS. It also ships the userland dynamic
 loader `ld-pagh` and, since 0.9.0, a runtime `dlopen`/`dlsym` API in the shared
 libc; 0.10.0 makes that API follow the new object's `DT_NEEDED` recursively and
 adds the `RTLD_GLOBAL`/`RTLD_LOCAL` scopes and `RTLD_DEFAULT`/`RTLD_NEXT`
-lookups. **0.12.0** adds userland TLS over kernel 0.21 (`getrandom`, `tls_connect`/`tls_write`/`tls_read`/`tls_close`, `https_get`). **0.11.0** added the BSD socket subset over kernel 0.17/0.18
-(TCP client, listener and `accept`, UDP datagrams, the ABI's `sockaddr_in`,
-`inet_*` and byte-order helpers), a minimal DNS A-record resolver over UDP
+lookups. **0.11.0** added the BSD socket subset over kernel 0.17/0.18 (TCP
+client, listener and `accept`, UDP datagrams, the ABI's `sockaddr_in`, `inet_*`
+and byte-order helpers), a minimal DNS A-record resolver over UDP
 (`gethostbyname` and a `getaddrinfo`-lite), exact `%f`/`%e`/`%g` float
-formatting, and `strerror`/`perror`. TLS is deliberately **not** part of it;
-*TLS is not reachable from userland* below explains exactly why.
+formatting, and `strerror`/`perror`. **0.12.0** adds userland TLS 1.3 over
+kernel 0.21: `getrandom` and the `pagh_tls_*` wrappers over syscalls 1100-1103
+(`tls_connect`/`tls_write`/`tls_read`/`tls_close`), plus `https_get`. The
+handshake is the kernel's, and so is the trust decision: the wrappers expose no
+flag that could relax certificate verification.
 
 Version **0.12.0** (`VERSION`, tag `v0.12.0`).
 
@@ -69,18 +72,19 @@ sockets, DNS and `%f`, with host peers (see *Live evidence* below).
 
 | Area | Provided |
 |---|---|
-| start/exit | `_start`, `exit`, `atexit` (LIFO), `abort` |
+| start/exit | `_start`, `exit`/`_exit` (whole process via `exit_group(94)`, POSIX semantics), `atexit` (LIFO), `abort` |
 | syscalls | `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit sched_yield getpid`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
 | memory | `malloc/calloc/realloc/free` (bump `brk`, `free` no-op), `memcpy/memset/memmove/memcmp` |
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strerror`; `perror` in stdio |
 | stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering; **`%f %e %g`** (exact IEEE-754 digits, half-even rounding), flags `- + space # 0`, `*` and `l/ll/h/hh/z` |
 | sockets | `include/sys/socket.h`: `socket/bind/listen/accept/connect/send/sendto/recv/recvfrom/setsockopt/getsockopt/shutdown`, `struct sockaddr_in`, `AF_INET`, `SOCK_STREAM`, `SOCK_DGRAM`, `SOCK_NONBLOCK`, `MSG_DONTWAIT`, `INADDR_ANY`; `htons/htonl/ntohs/ntohl`, `inet_aton/inet_addr/inet_ntoa/inet_pton/inet_ntop`; errors are the kernel's errno |
 | dns | `include/netdb.h`: `gethostbyname`, `getaddrinfo` (A only), `freeaddrinfo`, `gai_strerror`, `hstrerror`, `h_errno`; one A query over UDP to the DHCP server named in `resolv.conf` (plus `pagh_resolv_set_server`/`pagh_resolv_server`/`pagh_resolv_source`) |
+| tls | `include/pagh_tls.h`: `getrandom`, `pagh_tls_connect`/`pagh_tls_write`/`pagh_tls_read`/`pagh_tls_close` over kernel 1100-1103, `https_get`; the handshake and its fail-closed verification (CA-bundle chain, SAN, clock window, `CertificateVerify`) run in the kernel and cannot be disabled from userland |
 | files | `open/read/write/close/lseek`, `stat/fstat`, `opendir/readdir/closedir` |
 | env | `getenv/setenv/unsetenv` (mutable layer over the kernel frame) |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `clock_gettime`, `time`, `nanosleep` |
-| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds, 64 KiB stack) |
+| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds, 64 KiB stack); `pthread_exit` ends only the calling thread (93), while `exit`/`_exit`/`abort` end the process (94) |
 | signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
 | cwd | `chdir/getcwd` process-local (the ABI has no chdir); relative `open/stat/...` resolve against it |
 | dynamic | `ld-pagh` maps ET_DYN executables and their `DT_NEEDED` tree (recursively, up to 16 objects); `dlopen/dlsym/dlclose/dlerror` add, scope and resolve objects at runtime (`RTLD_GLOBAL`/`RTLD_LOCAL`, `RTLD_DEFAULT`/`RTLD_NEXT`); `DT_INIT`/`DT_INIT_ARRAY` run |
@@ -463,7 +467,7 @@ What it shows, per feature (exact lines from the transcript):
 
 ```sh
 ./build.sh                 # cross toolchain needed
-tools/host-tests.sh        # printf differential + DNS message tests, host-only
+tools/host-tests.sh        # printf differential, DNS/HTTP + errno tables, host-only
 PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
 ```
 

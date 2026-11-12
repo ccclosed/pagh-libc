@@ -8,7 +8,11 @@ const char *strerror(int err) {
     case 0: return "success";
     case EPERM: return "operation not permitted";
     case ENOENT: return "no such file or directory";
+    case ESRCH: return "no such process";
     case EINTR: return "interrupted system call";
+    case E2BIG: return "argument list too long";
+    case ENOEXEC: return "exec format error";
+    case ECHILD: return "no child processes";
     case EIO: return "input/output error";
     case EBADF: return "bad file descriptor";
     case EAGAIN: return "resource temporarily unavailable";
@@ -28,6 +32,7 @@ const char *strerror(int err) {
     case ENOTEMPTY: return "directory not empty";
     case ELOOP: return "too many levels of symbolic links";
     case EOVERFLOW: return "value too large for defined data type";
+    case EPROTO: return "protocol error";
     case ENOTSOCK: return "socket operation on non-socket";
     case EDESTADDRREQ: return "destination address required";
     case EMSGSIZE: return "message too long";
@@ -43,6 +48,7 @@ const char *strerror(int err) {
     case ETIMEDOUT: return "connection timed out";
     case ECONNREFUSED: return "connection refused";
     case EHOSTUNREACH: return "no route to host";
+    case EKEYREJECTED: return "certificate rejected by the trust decision";
     default: return "unknown error";
     }
 }
