@@ -33,6 +33,15 @@
 #define SYS_WAIT4 260
 #define SYS_GETPPID 173
 
+/* Descriptors, pipes and multiplexing. `poll` is the asm-generic 7; the kernel
+ * reads up to 64 `struct pollfd` entries and treats `ppoll`'s timespec as a
+ * millisecond timeout (its sigmask argument is accepted and not read). */
+#define SYS_POLL 7
+#define SYS_PPOLL 72
+#define SYS_DUP 23
+#define SYS_DUP2 24
+#define SYS_PIPE2 59
+
 /* BSD sockets (kernel >= 0.17.0 UDP, >= 0.18.0 listen/accept). 206/207 carry
  * the full sendto/recvfrom shape; send/recv are libc wrappers around them. */
 #define SYS_SOCKET 198
@@ -80,17 +89,17 @@ struct pagh_stat {
 long __pagh_syscall6(long nr, long a0, long a1, long a2, long a3, long a4, long a5);
 long __pagh_syscall3(long nr, long a0, long a1, long a2);
 
-#endif
-
 /* Threads, futex, signals, memory. */
 #define SYS_CLONE 220
 #define SYS_FUTEX 98
 #define SYS_GETTID 178
+#define SYS_SET_TID_ADDRESS 96
 #define SYS_TGKILL 131
 #define SYS_KILL 129
 #define SYS_RT_SIGACTION 134
 #define SYS_RT_SIGPROCMASK 135
 #define SYS_RT_SIGRETURN 139
+#define SYS_SIGALTSTACK 132
 #define SYS_MMAP 222
 #define SYS_MPROTECT 226
 #define SYS_MUNMAP 215
@@ -118,3 +127,5 @@ long __pagh_syscall3(long nr, long a0, long a1, long a2);
 #define PROT_READ 1
 #define PROT_WRITE 2
 #define PROT_EXEC 4
+
+#endif

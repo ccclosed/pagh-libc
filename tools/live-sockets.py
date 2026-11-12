@@ -467,6 +467,10 @@ REGRESSION = [
     # even though a worker thread is still alive (SYS_EXIT_GROUP, not SYS_EXIT).
     ("exit_semantics", "exit_semantics", "run /mnt/exit_semantics",
      ["exit_semantics: atexit handler ran"]),
+    # Descriptor multiplexing without a busy loop: pipe2 + fork + dup2 onto
+    # stdin, poll() for POLLIN, ppoll() for POLLHUP/EOF, sigaltstack and
+    # set_tid_address in the same program.
+    ("poll_fds", "poll_fds", "run /mnt/poll_fds", ["poll_fds: ok"]),
 ]
 
 

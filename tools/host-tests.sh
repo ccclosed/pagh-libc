@@ -35,6 +35,10 @@ echo "== HTTP framing test (head parse, chunked decode, refusal cases) =="
 $CC -O2 -Iinclude tests/http_test.c src/http.c -o build/host_http_test
 ./build/host_http_test
 
+echo "== POSIX wrapper ABI test (pollfd/stack_t/sigaction layouts, syscall numbers) =="
+$CC -O2 -Iinclude tests/posix_abi_test.c -o build/host_posix_abi_test
+./build/host_posix_abi_test
+
 echo "== errno table check (include/errno.h vs src/strerror.c) =="
 python3 tools/check_errno.py
 

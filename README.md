@@ -73,7 +73,7 @@ sockets, DNS and `%f`, with host peers (see *Live evidence* below).
 | Area | Provided |
 |---|---|
 | start/exit | `_start`, `exit`/`_exit` (whole process via `exit_group(94)`, POSIX semantics), `atexit` (LIFO), `abort` |
-| syscalls | `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit sched_yield getpid`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
+| syscalls | every number in the kernel's ABI table (`docs/abi.md` §2 in pagh-riscv) has a wrapper: `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit exit_group sched_yield getpid poll ppoll dup dup2 pipe2 sigaltstack set_tid_address`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
 | memory | `malloc/calloc/realloc/free` (bump `brk`, `free` no-op), `memcpy/memset/memmove/memcmp` |
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strerror`; `perror` in stdio |
 | stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering; **`%f %e %g`** (exact IEEE-754 digits, half-even rounding), flags `- + space # 0`, `*` and `l/ll/h/hh/z` |
@@ -81,6 +81,7 @@ sockets, DNS and `%f`, with host peers (see *Live evidence* below).
 | dns | `include/netdb.h`: `gethostbyname`, `getaddrinfo` (A only), `freeaddrinfo`, `gai_strerror`, `hstrerror`, `h_errno`; one A query over UDP to the DHCP server named in `resolv.conf` (plus `pagh_resolv_set_server`/`pagh_resolv_server`/`pagh_resolv_source`) |
 | tls | `include/pagh_tls.h`: `getrandom`, `pagh_tls_connect`/`pagh_tls_write`/`pagh_tls_read`/`pagh_tls_close` over kernel 1100-1103, `https_get`; the handshake and its fail-closed verification (CA-bundle chain, SAN, clock window, `CertificateVerify`) run in the kernel and cannot be disabled from userland |
 | files | `open/read/write/close/lseek`, `stat/fstat`, `opendir/readdir/closedir` |
+| pipes/poll | `include/unistd.h`: `pipe`/`pipe2`, `dup`/`dup2`; `include/poll.h`: `struct pollfd`, `poll`/`ppoll` (≤ 64 descriptors, 0 = scan, negative = wait); `include/signal.h`: `stack_t`/`sigaltstack`; `set_tid_address`; `examples/poll_fds.c` shows dup2 redirecting stdin and poll/ppoll waiting instead of a busy loop |
 | env | `getenv/setenv/unsetenv` (mutable layer over the kernel frame) |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `clock_gettime`, `time`, `nanosleep` |
@@ -100,6 +101,20 @@ no locking, and `realloc` copies `size` bytes without knowing the old size.
 `FILE` has no locking. `pthread_join` only works for threads created through
 this libc (a 16-slot registry).
 
+**Syscall coverage is complete.** Every syscall the kernel's ABI document lists
+(60 of them) has a C wrapper; the last seven — `poll`, `ppoll`, `dup`, `dup2`,
+`pipe2`, `sigaltstack`, `set_tid_address` — were added together with
+`examples/poll_fds.c` and `tests/posix_abi_test.c`. Before that the library
+wrapped 53/60, so a C program could neither redirect a descriptor nor wait on
+one without a `usleep`/`sched_yield` loop. The wrappers expose the kernel's
+semantics exactly: `poll` watches at most 64 descriptors and a 0 return is a
+timeout, `pipe2`'s flags must be 0, `dup2(oldfd, oldfd)` is a no-op, and
+`sigaltstack` takes the 24-byte `stack_t` with `SS_DISABLE`/`SS_ONSTACK`. The
+pipe is a 4 KiB ring that is non-blocking in both directions (`EAGAIN` when
+empty/full), reports EOF (`read` = 0) once every write end is closed, answers
+`EPIPE` with no readers, and the kernel has 8 pipes at once, shared by every
+process.
+
 Socket and DNS limits are the kernel's, made visible rather than papered over:
 
 - One active-open TCP client and **one** listener at a time; the accept queue
@@ -111,9 +126,9 @@ Socket and DNS limits are the kernel's, made visible rather than papered over:
   fragmentation); `sendto` needs a destination because the kernel has **no UDP
   `connect`**, and `read`/`write` on a UDP socket are the address-less shapes.
 - TCP `recv` is non-blocking on this ABI: `-EAGAIN` means "poll again" and 0
-  means the peer closed, so a program that wants a blocking read loops (the
-  examples show the loop). `shutdown` closes both directions; there is no
-  half-close.
+  means the peer closed, so a program either retries or waits for `POLLIN` in
+  `poll` (both shapes are in the examples; `tcp_client` uses `poll`).
+  `shutdown` closes both directions; there is no half-close.
 - Only `MSG_DONTWAIT` is understood, and only where the kernel documents it
   (UDP send/recv). `SOCK_CLOEXEC` is not accepted. `socketpair`, `select`,
   `sendmsg`/`recvmsg`, IPv6 and TLS answer `-ENOSYS` from the kernel.
@@ -464,6 +479,7 @@ What it shows, per feature (exact lines from the transcript):
 | `%f`/`%e`/`%g` + FPU | `float: %.20f    0.10000000000000000555 -> 0.10000000000000000555   ok` / `float: 355/113 = 3.141593` / `float: ok (22 formatted values + FPU arithmetic)` |
 | dlopen regression | the full 0.10.0 line set, ending `dlopen: RTLD_GLOBAL promotes an already-loaded group` / `run: /mnt/ld-pagh exited with code 0` |
 | threads / signals / files | `counter=8 ret=50/30`, `hits=1`, `line one` + `line two`, `counter=1000`, `ready=1 seen=1`, `cwd=/mnt`, `relative read=hello libc`, all `exited with code 0` |
+| pipes / poll / dup | `poll_fds: set_tid_address -> tid <n>`, `poll_fds: sigaltstack -> 8192-byte alternate stack accepted`, `poll_fds: poll -> POLLIN, read 33 bytes`, `poll_fds: ppoll -> POLLHUP, EOF`, `poll_fds: ok` |
 
 ```sh
 ./build.sh                 # cross toolchain needed
