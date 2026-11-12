@@ -203,6 +203,21 @@ int printf(const char *fmt, ...) {
     if (n > 0) write(1, buf, n < (int)sizeof buf ? (size_t)n : sizeof buf - 1);
     return n;
 }
+int vprintf(const char *fmt, va_list ap) {
+    char buf[1024];
+    int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    if (n > 0) write(1, buf, n < (int)sizeof buf ? (size_t)n : sizeof buf - 1);
+    return n;
+}
+/* The buffer is unbounded by definition; this is the same formatter as
+ * vsnprintf with "no limit" (a negative return would still mean an error). */
+int vsprintf(char *buf, const char *fmt, va_list ap) {
+    return vsnprintf(buf, (size_t)-1, fmt, ap);
+}
+int sprintf(char *buf, const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    int n = vsprintf(buf, fmt, ap); va_end(ap); return n;
+}
 int snprintf(char *buf, size_t size, const char *fmt, ...) {
     va_list ap; va_start(ap, fmt);
     int n = vsnprintf(buf, size, fmt, ap);

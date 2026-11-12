@@ -1,7 +1,7 @@
 #!/bin/sh
 # Host tests: run the pure library code on the build host, against the host's
-# libc (differential printf, getopt family, bsearch/tokenizers/memchr,
-# time/gmtime_r/localtime_r/strftime) and against hand-built DNS and HTTP
+# libc (differential printf/sprintf, getopt family, bsearch/tokenizers/memchr,
+# time/strftime, sscanf/vsscanf/fscanf) and against hand-built DNS and HTTP
 # messages, plus a synthetic-stream test for getline/getdelim and a table check
 # that every errno the header defines has a strerror() text.
 #
@@ -23,8 +23,10 @@ mkdir -p build
 echo "== printf differential test (host libc vs pagh vsnprintf) =="
 $CC -O2 -Iinclude -c tests/printf_test.c -o build/host_printf_test.o
 $CC -O2 -Iinclude -Dprintf=pagh_printf -Dsnprintf=pagh_snprintf \
-    -Dvsnprintf=pagh_vsnprintf -Dputs=pagh_puts -Dputchar=pagh_putchar \
-    -Dgetchar=pagh_getchar -c src/stdio.c -o build/host_stdio.o
+    -Dvsnprintf=pagh_vsnprintf -Dsprintf=pagh_sprintf \
+    -Dvsprintf=pagh_vsprintf -Dvprintf=pagh_vprintf -Dputs=pagh_puts \
+    -Dputchar=pagh_putchar -Dgetchar=pagh_getchar \
+    -c src/stdio.c -o build/host_stdio.o
 $CC -O2 -Iinclude -c src/float.c -o build/host_float.o
 $CC build/host_printf_test.o build/host_stdio.o build/host_float.o -o build/host_printf_test
 ./build/host_printf_test
@@ -72,6 +74,14 @@ $CC -O2 -Iinclude -Dgetline=pagh_getline -Dgetdelim=pagh_getdelim \
 $CC -O2 -Iinclude -Dgetline=pagh_getline -Dgetdelim=pagh_getdelim \
     tests/getline_test.c build/host_getline.o -o build/host_getline_test
 ./build/host_getline_test
+
+echo "== scanf differential test (sscanf/vsscanf/fscanf vs host libc) =="
+SCAN_RENAMES="-Dsscanf=pagh_sscanf -Dvsscanf=pagh_vsscanf -Dscanf=pagh_scanf \
+    -Dvscanf=pagh_vscanf -Dfscanf=pagh_fscanf -Dvfscanf=pagh_vfscanf \
+    -Dfgetc=pagh_scan_fgetc"
+$CC -O2 -Iinclude $SCAN_RENAMES -c src/scanf.c -o build/host_scanf.o
+$CC -O2 tests/scanf_test.c build/host_scanf.o -o build/host_scanf_test
+./build/host_scanf_test
 
 echo "== time differential test (clock/time/gettimeofday, gmtime_r/localtime_r, strftime) =="
 TIME_RENAMES="-Dclock_gettime=pagh_clock_gettime -Dnanosleep=pagh_nanosleep \

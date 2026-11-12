@@ -25,8 +25,26 @@ int fprintf(FILE *f, const char *fmt, ...);
 int vfprintf(FILE *f, const char *fmt, va_list ap);
 int fdprintf(int fd, const char *fmt, ...);
 int printf(const char *fmt, ...);
+int vprintf(const char *fmt, va_list ap);
+/* `sprintf` cannot check the destination size (the standard defines it that
+ * way); prefer snprintf. Both are thin wrappers over vsnprintf. */
+int sprintf(char *buf, const char *fmt, ...);
+int vsprintf(char *buf, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
+/* Formatted input. The scanner implements the C/POSIX conversions
+ * d i o u x X c s [ ] p n f e g and %%, with `*` suppression, field width and
+ * the hh/h/l/ll/z/j/t length modifiers. Not implemented (documented limits):
+ * wide characters (%lc/%ls/%l[), `%L` long double, `%a` hexadecimal floats,
+ * the C23 `%b` binary conversion (and its 0b prefix in %i), and locales (the
+ * decimal point is always '.'). A missing conversion is a matching failure,
+ * as the standard requires; a leading input failure returns EOF. */
+int sscanf(const char *str, const char *fmt, ...);
+int vsscanf(const char *str, const char *fmt, va_list ap);
+int scanf(const char *fmt, ...);
+int vscanf(const char *fmt, va_list ap);
+int fscanf(FILE *stream, const char *fmt, ...);
+int vfscanf(FILE *stream, const char *fmt, va_list ap);
 int puts(const char *s);
 int putchar(int c);
 int getchar(void);
