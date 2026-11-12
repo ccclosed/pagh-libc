@@ -1,15 +1,15 @@
 # Live TLS/entropy acceptance for pagh-libc
-# kernel: /home/oleg/pagh-riscv/target/riscv64gc-unknown-none-elf/release/pagh
-# kernel checkout: /home/oleg/pagh-riscv
+# kernel: /tmp/pagh-riscv-night/target/riscv64gc-unknown-none-elf/release/pagh
+# kernel checkout: /tmp/pagh-riscv-night
 # kernel revision: adae144 (crate 0.21.0, tag 0.21.0)
-# kernel sha256: d569aef920e9af80552295203dcd5120efc736bd643fe5b13db3b8db9f8c848f
-# pagh-libc revision: eb8356f (dirty)
+# kernel sha256: d5caba232a121a2f241be986d661dcdc2e4056226e87658a99d5a7886bf86fdf
+# pagh-libc revision: 27785e0 (clean)
 # host: QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)
 # host: OpenSSL 3.5.8 25 Aug 2026 (Library: OpenSSL 3.5.8 25 Aug 2026)
 # image: mke2fs -t ext2 -b 1024 -d <build/*.elf + etc/resolv.conf> disk.img
 # DHCP-leased DNS server: 10.0.2.3
 # pinned address for the wrong-name negative: 8.47.69.0 (errno=71)
-# self-signed chain-gate server: 127.0.0.1:49231 (guest: 10.0.2.2)
+# self-signed chain-gate server: 127.0.0.1:50407 (guest: 10.0.2.2)
 
 == boot 1: DHCP lease (net) ==
 
@@ -78,7 +78,7 @@ Boot HART MEDELEG           : 0x0000000000f4b509
 framebuffer  ramfb 1280x800 stride 5120 cells 100x37
 
 ========================================
-   pagh OS �� RISC-V (RV64)
+   pagh OS ��� RISC-V (RV64)
 ========================================
 boot hart   0
 device tree 0x8fe00000
@@ -87,8 +87,8 @@ timebase    10000000 Hz
 console     NS16550 @ 0x10000000
 pmm         62641/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
 sv39        on, satp=0x8000000000080b4d, identity 0x80000000..0x90000000 (RWX below 0x80b4d000, RW above), 65549 pages, 13 device
-rtc         goldfish @ 0x101000 - 2026-11-09 16:31:52 UTC
-rtc         raw 0x42d4e428 0x18e66d83 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+rtc         goldfish @ 0x101000 - 2026-11-11 21:47:15 UTC
+rtc         raw 0x401083d8 0x18e71be2 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
 entropy     32 bytes from /chosen/rng-seed - TLS session keys available
 timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
 plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
@@ -183,8 +183,8 @@ timebase    10000000 Hz
 console     NS16550 @ 0x10000000
 pmm         62641/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
 sv39        on, satp=0x8000000000080b4d, identity 0x80000000..0x90000000 (RWX below 0x80b4d000, RW above), 65549 pages, 13 device
-rtc         goldfish @ 0x101000 - 2026-11-09 16:31:56 UTC
-rtc         raw 0x3131e710 0x18e66d84 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+rtc         goldfish @ 0x101000 - 2026-11-11 21:47:19 UTC
+rtc         raw 0x2e864e80 0x18e71be3 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
 entropy     32 bytes from /chosen/rng-seed - TLS session keys available
 timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
 plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
@@ -203,13 +203,13 @@ pagh:rv64>
 
 pagh:rv64> run /mnt/tls_client example.com
 tls_client: GET example.com/ (port 443)
-tls_client: getrandom 16 bytes:7c978c516a6eb79f2c86d217051c7837
+tls_client: getrandom 16 bytes:4984c4b7176d5735ab1269562d2255b8
 tls_client: resolve example.com -> 8.47.69.0
 tls_client: tcp connected to 8.47.69.0:443
 [stack] tls user_open future = 1320 bytes
-tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794241922
+tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794433645
 tls: CertificateVerify OK (server proved possession of the leaf key)
-tls: user session 0 open tcp=0 host=example.com (TLS 1.3, AES-128-GCM-SHA256, server authenticated, 100 ms)
+tls: user session 0 open tcp=0 host=example.com (TLS 1.3, AES-128-GCM-SHA256, server authenticated, 130 ms)
 tls_client: handshake ok: TLS 1.3 session on fd 3, "example.com" authenticated by the kernel
 [stack] tls write future = 256 bytes
 tls_client: sent 103 bytes
@@ -234,9 +234,9 @@ pagh:rv64>
 pagh:rv64> run /mnt/https_get example.com
 https_get: GET example.com/ (cap 65536)
 [stack] tls user_open future = 1320 bytes
-tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794241956
+tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794433679
 tls: CertificateVerify OK (server proved possession of the leaf key)
-tls: user session 0 open tcp=0 host=example.com (TLS 1.3, AES-128-GCM-SHA256, server authenticated, 80 ms)
+tls: user session 0 open tcp=0 host=example.com (TLS 1.3, AES-128-GCM-SHA256, server authenticated, 70 ms)
 [stack] tls write future = 256 bytes
 [stack] tls read future = 424 bytes
 [stack] tls read future = 424 bytes
@@ -256,15 +256,15 @@ https_get: FAILED errno=2 no such file or directory (h_errno=1 host not found)
 https_get: no body was returned
 run: /mnt/https_get exited with code 1
 pagh:rv64>
-== host: openssl s_server example.com self-signed on 127.0.0.1:49231 (guest reaches it as 10.0.2.2:49231) ==
+== host: openssl s_server example.com self-signed on 127.0.0.1:50407 (guest reaches it as 10.0.2.2:50407) ==
 
 == negative: reachable socket, matching name, self-signed chain ==
 
-pagh:rv64> run /mnt/tls_client --ip 10.0.2.2 --port 49231 example.com
-tls_client: GET example.com/ (port 49231)
-tls_client: getrandom 16 bytes:d67daec40919452d83b36f669b9ac543
-tls_client: destination pinned to 10.0.2.2:49231
-tls_client: tcp connected to 10.0.2.2:49231
+pagh:rv64> run /mnt/tls_client --ip 10.0.2.2 --port 50407 example.com
+tls_client: GET example.com/ (port 50407)
+tls_client: getrandom 16 bytes:6836ec299e7c87de1b9d67c19bc39485
+tls_client: destination pinned to 10.0.2.2:50407
+tls_client: tcp connected to 10.0.2.2:50407
 [stack] tls user_open future = 1320 bytes
 tls: verify FAILED cause=chain (NoAnchor) - the server chain does not validate against the committed CA bundle
 tls: user session host=example.com FAILED stage=handshake (InvalidCertificate)
@@ -277,7 +277,7 @@ pagh:rv64>
 
 pagh:rv64> run /mnt/tls_client --ip 8.47.69.0 other.pagh.test
 tls_client: GET other.pagh.test/ (port 443)
-tls_client: getrandom 16 bytes:a7599b91f9a09423687490f8b23ff872
+tls_client: getrandom 16 bytes:94186f3401b8961cdfb7fbad57141d00
 tls_client: destination pinned to 8.47.69.0:443
 tls_client: tcp connected to 8.47.69.0:443
 [stack] tls user_open future = 1320 bytes
@@ -296,9 +296,9 @@ tls: user session host=other.pagh.test refused (Handshake)
 pagh:rv64> run /mnt/https_get example.com /no-such-page-pagh
 https_get: GET example.com/no-such-page-pagh (cap 65536)
 [stack] tls user_open future = 1320 bytes
-tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794242063
+tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794433786
 tls: CertificateVerify OK (server proved possession of the leaf key)
-tls: user session 0 open tcp=0 host=example.com (TLS 1.3, AES-128-GCM-SHA256, server authenticated, 80 ms)
+tls: user session 0 open tcp=0 host=example.com (TLS 1.3, AES-128-GCM-SHA256, server authenticated, 70 ms)
 [stack] tls write future = 256 bytes
 [stack] tls read future = 424 bytes
 https_get: FAILED errno=5 input/output error (h_errno=0 success)
@@ -310,7 +310,7 @@ pagh:rv64>
 pagh:rv64> run /mnt/https_get example.com / 100
 https_get: GET example.com/ (cap 100)
 [stack] tls user_open future = 1320 bytes
-tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794242093
+tls: verified leaf=sha256:85ca6ab068e9bcce88b6c4aa3c47f7d17228134a457f870d3800e6223a0df07a chain=4 certs anchors=6 host=example.com now=1794433816
 tls: CertificateVerify OK (server proved possession of the leaf key)
 tls: user session 0 open tcp=0 host=example.com (TLS 1.3, AES-128-GCM-SHA256, server authenticated, 80 ms)
 [stack] tls write future = 256 bytes
@@ -321,8 +321,8 @@ run: /mnt/https_get exited with code 1
 pagh:rv64>
 == regression: tcp_client against a host echo server ==
 
-pagh:rv64> run /mnt/tcp_client 10.0.2.2 45755 pagh-tls-regression
-tcp_client: connecting to 10.0.2.2:45755
+pagh:rv64> run /mnt/tcp_client 10.0.2.2 39241 pagh-tls-regression
+tcp_client: connecting to 10.0.2.2:39241
 tcp_client: connected
 tcp_client: SO_ERROR=0
 tcp_client: sent 19 bytes
@@ -332,15 +332,15 @@ run: /mnt/tcp_client exited with code 0
 pagh:rv64>
 == regression: udp_echo against a host echo server ==
 
-pagh:rv64> run /mnt/udp_echo 10.0.2.2 50198 3 45678
+pagh:rv64> run /mnt/udp_echo 10.0.2.2 60156 3 45678
 udp_echo: SO_TYPE=2 (SOCK_DGRAM=2)
 udp_echo: bound 0.0.0.0:45678
-udp_echo: sent 16 bytes to 10.0.2.2:50198: pagh udp echo #1
-udp_echo: recv 16 bytes from 10.0.2.2:50198: pagh udp echo #1
-udp_echo: sent 16 bytes to 10.0.2.2:50198: pagh udp echo #2
-udp_echo: recv 16 bytes from 10.0.2.2:50198: pagh udp echo #2
-udp_echo: sent 16 bytes to 10.0.2.2:50198: pagh udp echo #3
-udp_echo: recv 16 bytes from 10.0.2.2:50198: pagh udp echo #3
+udp_echo: sent 16 bytes to 10.0.2.2:60156: pagh udp echo #1
+udp_echo: recv 16 bytes from 10.0.2.2:60156: pagh udp echo #1
+udp_echo: sent 16 bytes to 10.0.2.2:60156: pagh udp echo #2
+udp_echo: recv 16 bytes from 10.0.2.2:60156: pagh udp echo #2
+udp_echo: sent 16 bytes to 10.0.2.2:60156: pagh udp echo #3
+udp_echo: recv 16 bytes from 10.0.2.2:60156: pagh udp echo #3
 udp_echo: ok (3 datagrams echoed)
 run: /mnt/udp_echo exited with code 0
 pagh:rv64>
@@ -348,7 +348,7 @@ pagh:rv64>
 
 pagh:rv64> run /mnt/dns_lookup example.com
 dns: server 10.0.2.3:53 (from /mnt/etc/resolv.conf)
-dns: gethostbyname example.com -> 8.47.69.0 (type=2 len=4)
+dns: gethostbyname example.com -> 8.6.112.0 (type=2 len=4)
 dns: getaddrinfo example.com http -> 8.6.112.0:80 family=2 socktype=1 addrlen=16
 dns: ok
 run: /mnt/dns_lookup exited with code 0
