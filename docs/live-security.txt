@@ -3,9 +3,9 @@
 # F-rt-2: vsnprintf integer precision past the 32-byte digit buffer
 # F-rt-3: PT_DYNAMIC p_vaddr/p_memsz validated against the image
 # kernel: /home/oleg/pagh-riscv/target/riscv64gc-unknown-none-elf/release/pagh
-# kernel checkout: /home/oleg/pagh-riscv (revision aa8f1a9 (dirty), crate 0.24.1)
+# kernel checkout: /home/oleg/pagh-riscv (revision 1180011 (clean), crate 0.24.1)
 # kernel sha256: b41593e326c07c4ba3077e3d0a15dadb5145894dbf72632758509ff0f6d2479f
-# pagh-libc: 0.15.1 (VERSION), revision 2699113 (dirty)
+# pagh-libc: 0.15.1 (VERSION), revision dc41e02 (clean)
 # host: QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)
 # image: mke2fs -t ext2 -b 1024 -d <root with build/*.elf, build/*.so, tests/security/make_evil_elf.py objects> disk.img
 # guest commands:
@@ -92,8 +92,8 @@ timebase    10000000 Hz
 console     NS16550 @ 0x10000000
 pmm         62601/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
 sv39        on, satp=0x8000000000080b75, identity 0x80000000..0x90000000 (RWX below 0x80b75000, RW above), 65549 pages, 13 device
-rtc         goldfish @ 0x101000 - 2026-11-13 18:03:28 UTC
-rtc         raw 0x2b708188 0x18e7acd5 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+rtc         goldfish @ 0x101000 - 2026-11-13 18:04:55 UTC
+rtc         raw 0x6d5ad5f8 0x18e7ace9 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
 entropy     32 bytes from /chosen/rng-seed - TLS session keys available
 timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
 plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
