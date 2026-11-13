@@ -9,6 +9,7 @@
  */
 #include <stddef.h>
 #include <getopt.h>
+#include <sys/time.h>
 #include <signal.h>
 #include <poll.h>
 #include <stdio.h>
@@ -52,6 +53,17 @@ CHECK(POLLNVAL == 0x20);
 CHECK(SS_ONSTACK == 1);
 CHECK(SS_DISABLE == 2);
 
+/* struct tm — the nine standard int fields, in C89 order, and no extra
+ * members (this libc has no tm_gmtoff/tm_zone). struct timeval is the ABI's
+ * two 64-bit fields. */
+CHECK(sizeof(struct tm) == 9 * sizeof(int));
+CHECK(offsetof(struct tm, tm_sec) == 0);
+CHECK(offsetof(struct tm, tm_year) == 5 * sizeof(int));
+CHECK(offsetof(struct tm, tm_isdst) == 8 * sizeof(int));
+CHECK(sizeof(struct timeval) == 16);
+CHECK(offsetof(struct timeval, tv_sec) == 0);
+CHECK(offsetof(struct timeval, tv_usec) == 8);
+
 /* struct option: four fields, in this order, and the has_arg constants. */
 CHECK(sizeof(struct option) == 3 * sizeof(void *) + 2 * sizeof(int));
 CHECK(offsetof(struct option, name) == 0);
@@ -79,6 +91,13 @@ static void *(*const bsearch_fn)(const void *, const void *, size_t, size_t,
 static char *(*const strtok_r_fn)(char *, const char *, char **) = strtok_r;
 static char *(*const strsep_fn)(char **, const char *) = strsep;
 static void *(*const memchr_fn)(const void *, int, size_t) = memchr;
+static int (*const clock_gettime_fn)(int, struct timespec *) = clock_gettime;
+static time_t (*const time_fn)(time_t *) = time;
+static int (*const gettimeofday_fn)(struct timeval *, void *) = gettimeofday;
+static struct tm *(*const gmtime_r_fn)(const time_t *, struct tm *) = gmtime_r;
+static struct tm *(*const localtime_r_fn)(const time_t *, struct tm *) = localtime_r;
+static struct tm *(*const gmtime_fn)(const time_t *) = gmtime;
+static size_t (*const strftime_fn)(char *, size_t, const char *, const struct tm *) = strftime;
 
 int main(void) {
     /* Keep the prototype checks "used" without calling anything. */
@@ -89,11 +108,16 @@ int main(void) {
         (const void *)&getopt_fn, (const void *)&getopt_long_fn,
         (const void *)&bsearch_fn, (const void *)&strtok_r_fn,
         (const void *)&strsep_fn, (const void *)&memchr_fn,
+        (const void *)&clock_gettime_fn, (const void *)&time_fn,
+        (const void *)&gettimeofday_fn, (const void *)&gmtime_r_fn,
+        (const void *)&localtime_r_fn, (const void *)&gmtime_fn,
+        (const void *)&strftime_fn,
     };
     (void)checked;
     printf("posix wrappers: ok (pollfd %d B, stack_t %d B, sigaction %d B, "
-           "option %d B, 14 prototypes)\n",
+           "option %d B, tm %d B, timeval %d B, 21 prototypes)\n",
            (int)sizeof(struct pollfd), (int)sizeof(stack_t),
-           (int)sizeof(struct sigaction), (int)sizeof(struct option));
+           (int)sizeof(struct sigaction), (int)sizeof(struct option),
+           (int)sizeof(struct tm), (int)sizeof(struct timeval));
     return 0;
 }

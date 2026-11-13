@@ -23,9 +23,15 @@ and string helpers a ported program expects: `getopt`/`getopt_long`/
 `getopt_long_only` (permutation, long-option abbreviations, `--`, `:`-style
 errors), `bsearch`, the reentrant `strtok_r`/`strsep` with their `strspn`/
 `strcspn` primitives, `memchr`, and `getline`/`getdelim` with `feof`/`ferror`/
-`clearerr`.
+`clearerr`. **0.14.0** adds the time helpers: `gettimeofday` (`<sys/time.h>`),
+`gmtime_r`/`localtime_r` and their non-reentrant forms (UTC; `localtime_r`
+applies only a fixed `TZ` offset — no tzdata, no DST) and `strftime` over the
+basic C/POSIX conversions. The ABI's only clock is the kernel **uptime**
+counter (`clock_gettime(0)` is "realtime/uptime"; there is no RTC syscall), so
+`time()` is seconds since boot and a fresh boot formats as 1970-01-01 +
+uptime. That limit is stated, not papered over.
 
-Version **0.13.0** (`VERSION`, tag `v0.13.0`).
+Version **0.14.0** (`VERSION`, tag `v0.14.0`).
 
 ## Build the toolchain
 
@@ -68,12 +74,14 @@ run /mnt/udp_echo 10.0.2.2 9050 3  # + a host UDP echo server
 run /mnt/dns_lookup example.com    # over /etc/resolv.conf (or @A.B.C.D[:port])
 run /mnt/float_printf              # %f/%e/%g and FPU arithmetic
 run /mnt/getline                   # getline/getdelim on a real ext2 file
+run /mnt/timefmt                   # clock/gmtime_r/localtime_r/strftime
 ```
 
 `tools/live-dlopen.sh` builds the disk and drives the dlopen test through a
 pagh-riscv checkout's `tools/run.py`; `tools/live-sockets.py` does the same for
-sockets, DNS and `%f`, with host peers, and `tools/live-getline.py` for the
-getline/getdelim file round-trip (see *Live evidence* below).
+sockets, DNS and `%f`, with host peers, `tools/live-getline.py` for the
+getline/getdelim file round-trip and `tools/live-timefmt.py` for the time
+helpers (see *Live evidence* below).
 
 ## Status
 
@@ -93,7 +101,7 @@ getline/getdelim file round-trip (see *Live evidence* below).
 | pipes/poll | `include/unistd.h`: `pipe`/`pipe2`, `dup`/`dup2`; `include/poll.h`: `struct pollfd`, `poll`/`ppoll` (≤ 64 descriptors, 0 = scan, negative = wait); `include/signal.h`: `stack_t`/`sigaltstack`; `set_tid_address`; `examples/poll_fds.c` shows dup2 redirecting stdin and poll/ppoll waiting instead of a busy loop |
 | env | `getenv/setenv/unsetenv` (mutable layer over the kernel frame) |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
-| time | `clock_gettime`, `time`, `nanosleep` |
+| time | `include/time.h`: `clock_gettime`, `time` (the ABI's uptime clock — seconds since boot, not wall time), `nanosleep`/`sleep`/`usleep`; `gettimeofday` in `<sys/time.h>`; `struct tm`, `gmtime_r`/`localtime_r`/`gmtime`/`localtime` (UTC; `localtime_r` applies a fixed `TZ` offset, no tzdata/DST) and `strftime` (C/POSIX basic conversions, C-locale names, truncation returns 0) |
 | threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds, 64 KiB stack); `pthread_exit` ends only the calling thread (93), while `exit`/`_exit`/`abort` end the process (94) |
 | signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
 | cwd | `chdir/getcwd` process-local (the ABI has no chdir); relative `open/stat/...` resolve against it |
@@ -112,6 +120,18 @@ this libc (a 16-slot registry). `getline` grows its buffer by allocating a
 larger one and copying, because `realloc` cannot learn the old size; the old
 buffer is not reclaimed (`free` is a no-op), so a line that outgrows the
 initial 120 bytes costs one dead allocation per doubling until exit.
+
+**Time is uptime.** `clock_gettime(0)` and `(1)` both return the kernel's
+millisecond uptime (`pagh-riscv` returns the same counter for both), and the
+ABI has no RTC/wall-clock syscall, so `time()`/`gettimeofday()` are seconds
+since boot — the RTC exists in the kernel only for the TLS certificate clock
+gate. `gmtime_r` formats that value as Unix seconds, i.e. 1970-01-01 + uptime;
+`strftime` is correct relative to that pseudo-epoch. `localtime_r` has no
+timezone database (no `/etc/localtime`, no tzdata): it applies only a fixed
+POSIX standard-time offset from `TZ` (`UTC`, `MSK-3`, `EST5`, `UTC+2`, ...);
+DST rules and zone names fall back to UTC. `mktime`/`timegm`, `%z` and the GNU
+`%-d`/`%_d`/`%0d` padding flags are not implemented (unknown conversions are
+copied literally, as glibc does).
 
 **Syscall coverage is complete.** Every syscall the kernel's ABI document lists
 (60 of them) has a C wrapper; the last seven — `poll`, `ppoll`, `dup`, `dup2`,
@@ -468,6 +488,15 @@ Earlier milestones' transcripts remain in `docs/live-dynamic*.txt` and
 
 ## Live evidence
 
+[`docs/live-timefmt.txt`](docs/live-timefmt.txt) is the committed transcript of
+one `tools/live-timefmt.py` run: `clock_gettime`/`time`/`gettimeofday` agree
+within a second (on a fresh boot the ABI's uptime clock is near zero, which the
+transcript shows honestly), `gmtime_r` produces the 1970-01-01 + uptime
+breakdown, `localtime_r` equals it with `TZ` unset, `strftime` agrees with
+`snprintf` of the same fields (names, `%e`, `%j`, `%u`, `%w`, `%I`, `%p`),
+truncation returns 0, and `TZ=MSK-3`/`TZ=EST5` produce exactly UTC+3/UTC-5
+compared against `gmtime_r` of the shifted epoch.
+
 [`docs/live-getline.txt`](docs/live-getline.txt) is the committed transcript of
 one `tools/live-getline.py` run: an ext2 image with `build/getline.elf`, the
 guest program writing `/mnt/getline.txt` and reading it back with `getline`
@@ -507,6 +536,7 @@ What it shows, per feature (exact lines from the transcript):
 tools/host-tests.sh        # printf/getopt/libc differential + DNS/HTTP/errno, host-only
 PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-getline.py
+PAGH_RISCV=../pagh-riscv python3 tools/live-timefmt.py
 ```
 
 The committed transcript was captured with `qemu-system-riscv64` 10.2.2, xPack
