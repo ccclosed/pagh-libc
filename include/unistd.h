@@ -3,6 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <pagh.h>
+/* POSIX declares getopt() and the optarg/optind/opterr/optopt variables in
+ * <unistd.h>; <getopt.h> adds struct option and the long-option entry points. */
+#include <getopt.h>
 long read(int fd, void *buf, size_t n);
 long write(int fd, const void *buf, size_t n);
 int open(const char *path, int flags, ...);
