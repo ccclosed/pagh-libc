@@ -3,8 +3,9 @@
 # libc (differential printf/sprintf, getopt family, bsearch/tokenizers/memchr,
 # time/strftime, sscanf/vsscanf/fscanf), under AddressSanitizer for the
 # integer width/precision bounds, and against hand-built DNS and HTTP
-# messages, plus a synthetic-stream test for getline/getdelim and a table check
-# that every errno the header defines has a strerror() text.
+# messages, plus a synthetic-stream test for getline/getdelim, a synthetic-
+# object test for ld-pagh's constructor call-target validation, and a table
+# check that every errno the header defines has a strerror() text.
 #
 #   ./tools/host-tests.sh
 #
@@ -112,6 +113,13 @@ $CC -O2 -c tests/host_errno_shim.c -o build/host_errno_shim.o
 $CC -O2 tests/time_test.c build/host_time.o build/host_errno_shim.o \
     -o build/host_time_test
 ./build/host_time_test
+
+echo "== ld-pagh call-target validation (DT_INIT/DT_INIT_ARRAY/FINI, SHN_ABS) =="
+# src/dynload.c is compiled into the test translation unit so the static
+# validation helpers are exercised directly against synthetic ET_DYN objects;
+# no syscall or mapped file is needed.  This is the F-r2-libc-1 inner loop.
+$CC -O2 -Iinclude tests/dynload_targets_test.c -o build/host_dynload_targets_test
+./build/host_dynload_targets_test
 
 echo "== errno table check (include/errno.h vs src/strerror.c) =="
 python3 tools/check_errno.py

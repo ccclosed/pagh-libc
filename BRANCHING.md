@@ -40,8 +40,8 @@ as `main`. `release.yml` runs only for version tags.
 | `vX.Y.Z-rc.N` | `dev` | Pre-release |
 | `vX.Y.Z-pre.N` | `dev` | Pre-release |
 
-The version source of truth is `VERSION` (currently `0.15.1`); a tag must match
-it, for example `v0.15.1`. The release workflow checks ancestry, not the version
+The version source of truth is `VERSION` (currently `0.15.2`); a tag must match
+it, for example `v0.15.2`. The release workflow checks ancestry, not the version
 string — the version bump and the tag are made in the same release step by a
 maintainer.
 
