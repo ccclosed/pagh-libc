@@ -13,6 +13,35 @@ static void out_str(char *buf, size_t size, size_t *pos, const char *s) {
     while (*s) out_char(buf, size, pos, *s++);
 }
 
+/* Emit `count` copies of `c`.  Same truncation contract as out_char(): only
+ * bytes with index < size-1 are stored, and the position keeps counting so
+ * snprintf's return value is still the untruncated length.  Filling the run in
+ * one go matters: the width and precision come from the format or from an
+ * argument, and an attacker-controlled `%.2147483647d` must not turn into a
+ * per-byte loop. */
+static void out_fill(char *buf, size_t size, size_t *pos, char c, unsigned long count) {
+    size_t p = *pos;
+    if (count && size >= 2 && p < size - 1) {
+        size_t n = count < size - 1 - p ? (size_t)count : size - 1 - p;
+        memset(buf + p, c, n);
+    }
+    *pos = p + count;
+}
+
+/* Parse a decimal field width or precision.  Saturates at INT_MAX instead of
+ * overflowing (signed overflow is undefined behaviour, and "%.9999999999d" is
+ * a valid format string). */
+static int parse_dec(const char **p) {
+    int v = 0;
+    while (**p >= '0' && **p <= '9') {
+        int d = **p - '0';
+        if (v > (2147483647 - d) / 10) v = 2147483647;
+        else v = v * 10 + d;
+        (*p)++;
+    }
+    return v;
+}
+
 /* Unsigned value to `out`, most significant digit first; returns the length. */
 static int utoa(char *out, unsigned long v, int base, int upper) {
     char tmp[32];
@@ -24,23 +53,30 @@ static int utoa(char *out, unsigned long v, int base, int upper) {
     return n;
 }
 
-/* Emit `prefix` + `text` with width/padding. Zero padding goes between the
- * prefix and the digits ("-00012", "0x00ff"), space padding in front. */
+/* Emit `prefix` + `zeros` zero digits + `text` with width/padding.  The
+ * precision zero-extension is emitted straight into the output instead of
+ * being inserted into the caller's stack buffer ("%.128d" needs 128 digits; a
+ * fixed 32-byte digit array is where the old code overran the stack). Zero
+ * padding from the width flag goes between the prefix and the digits
+ * ("-00012", "0x00ff"), space padding in front. */
 static void out_field(char *buf, size_t size, size_t *pos, const char *prefix, int plen,
-                      const char *text, int len, int width, int zero, int left) {
-    int total = plen + len;
-    int pad = width > total ? width - total : 0;
+                      int zeros, const char *text, int len, int width, int zero, int left) {
+    unsigned long total = (unsigned long)plen + (unsigned long)zeros + (unsigned long)len;
+    unsigned long pad = width > 0 && (unsigned long)width > total ? (unsigned long)width - total : 0;
     if (left) {
         for (int i = 0; i < plen; i++) out_char(buf, size, pos, prefix[i]);
+        out_fill(buf, size, pos, '0', (unsigned long)zeros);
         for (int i = 0; i < len; i++) out_char(buf, size, pos, text[i]);
-        for (int i = 0; i < pad; i++) out_char(buf, size, pos, ' ');
+        out_fill(buf, size, pos, ' ', pad);
     } else if (zero) {
         for (int i = 0; i < plen; i++) out_char(buf, size, pos, prefix[i]);
-        for (int i = 0; i < pad; i++) out_char(buf, size, pos, '0');
+        out_fill(buf, size, pos, '0', pad);
+        out_fill(buf, size, pos, '0', (unsigned long)zeros);
         for (int i = 0; i < len; i++) out_char(buf, size, pos, text[i]);
     } else {
-        for (int i = 0; i < pad; i++) out_char(buf, size, pos, ' ');
+        out_fill(buf, size, pos, ' ', pad);
         for (int i = 0; i < plen; i++) out_char(buf, size, pos, prefix[i]);
+        out_fill(buf, size, pos, '0', (unsigned long)zeros);
         for (int i = 0; i < len; i++) out_char(buf, size, pos, text[i]);
     }
 }
@@ -63,9 +99,10 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
         if (*fmt == '*') {
             width = va_arg(ap, int);
             fmt++;
-            if (width < 0) { left = 1; width = -width; }
+            /* -INT_MIN is not representable; saturate instead of overflowing. */
+            if (width < 0) { left = 1; width = width == (-2147483647 - 1) ? 2147483647 : -width; }
         } else {
-            while (*fmt >= '0' && *fmt <= '9') { width = width * 10 + (*fmt++ - '0'); }
+            width = parse_dec(&fmt);
         }
         if (*fmt == '.') {
             fmt++;
@@ -75,7 +112,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
                 fmt++;
                 if (precision < 0) precision = -1;
             } else {
-                while (*fmt >= '0' && *fmt <= '9') { precision = precision * 10 + (*fmt++ - '0'); }
+                precision = parse_dec(&fmt);
             }
         }
         if (*fmt == 'l') { longs = 1; fmt++; if (*fmt == 'l') { longs = 2; fmt++; } }
@@ -96,17 +133,17 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             int n = 0;
             while (sv[n] && (precision < 0 || n < precision)) n++;
             int pad = width > n ? width - n : 0;
-            if (!left) for (int i = 0; i < pad; i++) out_char(buf, size, &pos, ' ');
+            if (!left) out_fill(buf, size, &pos, ' ', (unsigned long)pad);
             for (int i = 0; i < n; i++) out_char(buf, size, &pos, sv[i]);
-            if (left) for (int i = 0; i < pad; i++) out_char(buf, size, &pos, ' ');
+            if (left) out_fill(buf, size, &pos, ' ', (unsigned long)pad);
             break;
         }
         case 'c': {
             char c = (char)va_arg(ap, int);
             int pad = width > 1 ? width - 1 : 0;
-            if (!left) for (int i = 0; i < pad; i++) out_char(buf, size, &pos, ' ');
+            if (!left) out_fill(buf, size, &pos, ' ', (unsigned long)pad);
             out_char(buf, size, &pos, c);
-            if (left) for (int i = 0; i < pad; i++) out_char(buf, size, &pos, ' ');
+            if (left) out_fill(buf, size, &pos, ' ', (unsigned long)pad);
             break;
         }
         case 'd': case 'i': {
@@ -114,18 +151,16 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             if (half == 1) v = (short)v;
             else if (half == 2) v = (signed char)v;
             char text[32];
-            int n = 0;
             unsigned long mag = v < 0 ? (unsigned long)-(v + 1) + 1UL : (unsigned long)v;
-            n = utoa(text, mag, 10, 0);
-            int digits = n;
+            int n = utoa(text, mag, 10, 0);
+            int len = n, zeros = 0;
             if (precision >= 0) {
                 zero = 0;
-                if (mag == 0 && precision == 0) digits = 0;
-                if (precision > n) {
-                    int pad = precision - n;
-                    memmove(text + pad, text, (size_t)n);
-                    for (int i = 0; i < pad; i++) text[i] = '0';
-                    digits = precision;
+                if (mag == 0 && precision == 0) len = 0;
+                else if (precision > n) {
+                    /* The zero extension is emitted by out_field(); it must
+                     * never be materialised into text[32] (F-rt-2). */
+                    zeros = precision - n;
                 }
             }
             char prefix[1];
@@ -133,7 +168,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             if (v < 0) prefix[plen++] = '-';
             else if (plus) prefix[plen++] = '+';
             else if (space) prefix[plen++] = ' ';
-            out_field(buf, size, &pos, prefix, plen, text, digits, width, zero, left);
+            out_field(buf, size, &pos, prefix, plen, zeros, text, len, width, zero, left);
             break;
         }
         case 'u': case 'x': case 'X': case 'o': {
@@ -144,33 +179,31 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
             else if (half == 2) v = (unsigned char)v;
             char text[32];
             int n = utoa(text, v, base, upper);
-            int digits = n;
+            int len = n, zeros = 0;
             if (precision >= 0) {
                 zero = 0;
-                if (v == 0 && precision == 0) digits = 0;
-                if (precision > n) {
-                    int pad = precision - n;
-                    memmove(text + pad, text, (size_t)n);
-                    for (int i = 0; i < pad; i++) text[i] = '0';
-                    digits = precision;
-                }
+                if (v == 0 && precision == 0) len = 0;
+                else if (precision > n) zeros = precision - n;
             }
             char prefix[2];
             int plen = 0;
+            /* '#' on octal forces a leading zero, unless the precision
+             * padding already starts the field with one (or the digits do). */
+            int first_is_zero = zeros > 0 || (len > 0 && text[0] == '0');
             if (alt && base == 16 && v != 0) {
                 prefix[plen++] = '0';
                 prefix[plen++] = upper ? 'X' : 'x';
-            } else if (alt && base == 8 && (digits == 0 || text[0] != '0')) {
+            } else if (alt && base == 8 && (len == 0 || !first_is_zero)) {
                 prefix[plen++] = '0';
             }
-            out_field(buf, size, &pos, prefix, plen, text, digits, width, zero, left);
+            out_field(buf, size, &pos, prefix, plen, zeros, text, len, width, zero, left);
             break;
         }
         case 'p': {
             unsigned long v = (unsigned long)va_arg(ap, void *);
             char text[32];
             int n = utoa(text, v, 16, 0);
-            out_field(buf, size, &pos, "0x", 2, text, n, width, 0, left);
+            out_field(buf, size, &pos, "0x", 2, 0, text, n, width, 0, left);
             break;
         }
         case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {

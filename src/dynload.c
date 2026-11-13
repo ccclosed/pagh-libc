@@ -52,6 +52,7 @@
 #define SHT_DYNSYM 11
 #define SHN_UNDEF 0
 #define SHN_ABS 0xfff1
+#define STT_OBJECT 1
 #define STT_TLS 6
 
 #define R_RISCV_NONE 0
@@ -209,6 +210,28 @@ static int read_file(struct dl_object *o, const char *path) {
     return 0;
 }
 
+/* PT_DYNAMIC's p_vaddr/p_memsz come from the file and dyn_value()/
+ * collect_needed() read them as a `unsigned long` array at base + p_vaddr.
+ * Validate them against the image that is about to be mapped, before anything
+ * from that table can be dereferenced (F-rt-3: a 369-byte ELF rejected this
+ * way used to make the loader read wherever p_vaddr pointed). */
+static int validate_dynamic(struct dl_object *o, unsigned long image) {
+    for (int i = 0; i < o->eh->phnum; i++) {
+        struct phdr *p = (struct phdr *)(o->data + o->eh->phoff + (unsigned long)i * o->eh->phentsize);
+        if (p->type != PT_DYNAMIC) continue;
+        if (!p->memsz) continue; /* no dynamic entries to read */
+        if (p->vaddr > image || p->memsz > image - p->vaddr) {
+            dl_error_set1("malformed ELF: PT_DYNAMIC outside the image in %s", o->path);
+            return -1;
+        }
+        if (p->vaddr % sizeof(unsigned long) || p->memsz % sizeof(unsigned long)) {
+            dl_error_set1("malformed ELF: unaligned PT_DYNAMIC in %s", o->path);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int load_object(struct dl_object *o) {
     unsigned long max = 0;
     for (int i = 0; i < o->eh->phnum; i++) {
@@ -227,6 +250,7 @@ static int load_object(struct dl_object *o) {
     }
     if (!max) { dl_error_set1("object has no loadable segments: %s", o->path); return -1; }
     max = (max + 4095) & ~4095UL;
+    if (validate_dynamic(o, max) < 0) return -1;
     long base = sys_mmap(max, PROT_READ | PROT_WRITE);
     if (base < 0) { dl_error_set1("cannot map %s", o->path); return -1; }
     o->base = (unsigned char *)base;
@@ -299,7 +323,18 @@ static unsigned long resolve_in(struct dl_object *o, const char *name) {
         if (s->shndx == SHN_UNDEF || (s->info & 0xf) == STT_TLS) continue;
         const char *nm = dynstr(&v, s->name);
         if (!nm || strcmp(nm, name)) continue;
-        if (s->shndx == SHN_ABS) return s->value;
+        if (s->shndx == SHN_ABS) {
+            /* An absolute symbol carries a value, not an offset: accept it
+             * only when it points inside the object that defines it.  Without
+             * this a file could make a name lookup hand out an arbitrary
+             * address (F-rt-1: `*slot = st` through such a symbol). */
+            if (s->value < (unsigned long)o->base ||
+                s->value - (unsigned long)o->base >= o->total) continue;
+            return s->value;
+        }
+        /* A section-relative value outside the object's own image is a
+         * malformed definition, not something to hand to a relocation. */
+        if (s->value >= o->total) continue;
         return (unsigned long)o->base + s->value;
     }
     return 0;
@@ -345,6 +380,49 @@ static unsigned long resolve_next(struct dl_state *st, int from, const char *nam
 static void promote_group(struct dl_state *st, int group) {
     for (int i = 0; i < st->count; i++)
         if (st->objs[i].group == group) st->objs[i].global = 1;
+}
+
+/* Is `addr` an address-aligned pointer-sized slot inside a writable PT_LOAD
+ * of `o`?  The loader publishes its state pointer through
+ * `__pagh_dl_state`; the store destination must be a real variable in a loaded
+ * object, never an arbitrary address taken from a symbol table (F-rt-1). */
+static int writable_slot(struct dl_object *o, unsigned long addr) {
+    if (!o->base || addr % sizeof(unsigned long)) return 0;
+    for (int i = 0; i < o->eh->phnum; i++) {
+        struct phdr *p = (struct phdr *)(o->data + o->eh->phoff + (unsigned long)i * o->eh->phentsize);
+        if (p->type != PT_LOAD || !(p->flags & 2)) continue;
+        if (p->memsz < sizeof(unsigned long) ||
+            p->vaddr > o->total || p->memsz > o->total - p->vaddr) continue;
+        unsigned long start = (unsigned long)o->base + p->vaddr;
+        if (addr >= start && addr - start <= p->memsz - sizeof(unsigned long)) return 1;
+    }
+    return 0;
+}
+
+/* Find the loaded shared libc's copy of `__pagh_dl_state`.  Only a defined,
+ * non-SHN_ABS, pointer-aligned object symbol inside the exporting object's own
+ * writable segment is accepted, and the object the loader was asked to run
+ * (index 0, the one whose symbol table is untrusted input) is skipped: it is
+ * not the exporter of the runtime's state variable.  Returns 0 when no loaded
+ * object exports a usable slot (e.g. every loaded object is static). */
+static struct dl_state **dl_state_slot(struct dl_state *st) {
+    for (int i = 1; i < st->count; i++) {
+        struct dl_object *o = &st->objs[i];
+        struct dynsym_view v;
+        if (!o->base || dynsym_view(o, &v) < 0) continue;
+        for (unsigned long k = 0; k < v.count; k++) {
+            struct sym *s = (struct sym *)(v.tab + k * v.entsize);
+            if (s->shndx == SHN_UNDEF || s->shndx == SHN_ABS) continue;
+            if ((s->info & 0xf) != STT_OBJECT) continue;
+            const char *nm = dynstr(&v, s->name);
+            if (!nm || strcmp(nm, "__pagh_dl_state")) continue;
+            if (s->value >= o->total) continue;
+            unsigned long addr = (unsigned long)o->base + s->value;
+            if (!writable_slot(o, addr)) continue;
+            return (struct dl_state **)addr;
+        }
+    }
+    return 0;
 }
 
 static int relocate(struct dl_object *o, struct dl_state *st, int idx) {
@@ -407,15 +485,28 @@ static int relocate(struct dl_object *o, struct dl_state *st, int idx) {
     return 0;
 }
 
-static unsigned long dyn_value(struct dl_object *o, unsigned long tag) {
+/* The validated dynamic table of `o`: 8-byte words inside the mapped image.
+ * load_object() rejected any PT_DYNAMIC whose vaddr/memsz did not fit, so the
+ * bounds check here is only defence in depth.  Returns 0 when there is no
+ * table. */
+static int dynamic_table(struct dl_object *o, unsigned long **tab, unsigned long *words) {
     for (int i = 0; i < o->eh->phnum; i++) {
         struct phdr *p = (struct phdr *)(o->data + o->eh->phoff + (unsigned long)i * o->eh->phentsize);
-        if (p->type != PT_DYNAMIC) continue;
-        unsigned long *d = (unsigned long *)(o->base + p->vaddr);
-        for (unsigned long j = 0; j + 1 < p->memsz / 8; j += 2) {
-            if (d[j] == tag) return d[j + 1];
-            if (d[j] == DT_NULL) break;
-        }
+        if (p->type != PT_DYNAMIC || !p->memsz) continue;
+        if (!o->base || p->vaddr > o->total || p->memsz > o->total - p->vaddr) continue;
+        *tab = (unsigned long *)(o->base + p->vaddr);
+        *words = p->memsz / sizeof(unsigned long);
+        return 1;
+    }
+    return 0;
+}
+
+static unsigned long dyn_value(struct dl_object *o, unsigned long tag) {
+    unsigned long *d, words;
+    if (!dynamic_table(o, &d, &words)) return 0;
+    for (unsigned long j = 0; j + 1 < words; j += 2) {
+        if (d[j] == tag) return d[j + 1];
+        if (d[j] == DT_NULL) break;
     }
     return 0;
 }
@@ -442,16 +533,13 @@ static int file_dir(const char *path, char *out, unsigned long size) {
 
 static int collect_needed(struct dl_object *o, unsigned long *offs, int max, int *count) {
     *count = 0;
-    for (int i = 0; i < o->eh->phnum; i++) {
-        struct phdr *p = (struct phdr *)(o->data + o->eh->phoff + (unsigned long)i * o->eh->phentsize);
-        if (p->type != PT_DYNAMIC) continue;
-        unsigned long *d = (unsigned long *)(o->base + p->vaddr);
-        for (unsigned long j = 0; j + 1 < p->memsz / 8; j += 2) {
-            if (d[j] == DT_NULL) break;
-            if (d[j] != DT_NEEDED) continue;
-            if (*count >= max) { dl_error_set("too many DT_NEEDED libraries"); return -1; }
-            offs[(*count)++] = d[j + 1];
-        }
+    unsigned long *d, words;
+    if (!dynamic_table(o, &d, &words)) return 0;
+    for (unsigned long j = 0; j + 1 < words; j += 2) {
+        if (d[j] == DT_NULL) break;
+        if (d[j] != DT_NEEDED) continue;
+        if (*count >= max) { dl_error_set("too many DT_NEEDED libraries"); return -1; }
+        offs[(*count)++] = d[j + 1];
     }
     return 0;
 }
@@ -652,10 +740,14 @@ int __pagh_dl_run(int argc, char **argv, char **envp) {
     for (int i = 0; i < st->count; i++)
         if (protect_object(&st->objs[i]) < 0) goto fail;
 
-    /* Publish this table into whichever loaded object exports the variable
-     * (libpagh-c.so in a dynamically linked program).  Doing it before the
-     * constructors means a constructor may legally call dlopen. */
-    struct dl_state **slot = (struct dl_state **)resolve_global(st, "__pagh_dl_state");
+    /* Publish this table into whichever loaded shared library exports the
+     * variable (libpagh-c.so in a dynamically linked program).  Doing it before
+     * the constructors means a constructor may legally call dlopen.  The
+     * destination is validated as a real writable slot in an exporter other
+     * than the object being run, never resolved through the untrusted object's
+     * own symbol table (F-rt-1: an SHN_ABS `__pagh_dl_state` used to become an
+     * arbitrary-address store). */
+    struct dl_state **slot = dl_state_slot(st);
     if (slot) *slot = st;
 
     for (int i = st->count - 1; i >= 0; i--) call_inits(&st->objs[i]);

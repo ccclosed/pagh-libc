@@ -184,9 +184,61 @@ static void integer_cases(void) {
     CHECK("a%sb%dc%08.3f", "x", -7, 3.14159);
 }
 
+static void precision_cases(void) {
+    /* F-rt-2 regression: the integer precision path used to memmove
+     * `precision - digits` bytes inside `char text[32]`, so a large precision
+     * overwrote the caller's stack.  These cases agree with glibc and cover
+     * the 32-byte boundary and the 33..112 sweep from the audit, plus 128 and
+     * a precision wider than the working buffer used by older builds. */
+    static const int precisions[] = {
+        0, 1, 2, 3, 10, 21, 22, 23, 30, 31, 32, 33, 34, 40, 48, 56, 64,
+        80, 100, 112, 128, 200, 511,
+    };
+    for (unsigned i = 0; i < sizeof precisions / sizeof precisions[0]; i++) {
+        int p = precisions[i];
+        CHECK("%.*d", p, 42);
+        CHECK("%.*d", p, 0);
+        CHECK("%.*d", p, 2147483647);
+        CHECK("%.*d", p, -2147483647 - 1);
+        CHECK("%.*i", p, -7);
+        CHECK("%.*u", p, 4294967295u);
+        CHECK("%.*x", p, 0xdeadbeefu);
+        CHECK("%.*X", p, 0xdeadbeefu);
+        CHECK("%.*o", p, 511u);
+        CHECK("%.*o", p, 0);
+        CHECK("%#.*o", p, 0);
+        CHECK("%#.*o", p, 8u);
+        CHECK("%#.*x", p, 255u);
+        CHECK("%.*ld", p, -9223372036854775807L - 1);
+        CHECK("%.*lu", p, 18446744073709551615UL);
+        CHECK("%.*hhd", p, 300);
+        CHECK("%.*hhu", p, 300);
+        CHECK("%+.*d", p, 42);
+        CHECK("% .*d", p, 42);
+        CHECK("%.*d|", p, -42);
+        CHECK("%*.*d", 120, p, -42);
+        CHECK("%-*.*d", 120, p, -42);
+        CHECK("%0*.*d", 120, p, -42);
+    }
+    /* A negative precision means "omitted", in both implementations. */
+    CHECK("%.*d", -1, 42);
+    CHECK("%.*d", -123, -42);
+    CHECK("%*.*d", 10, -3, 7);
+    CHECK("%-*.*d", 10, -3, 7);
+    CHECK("%.*u", -5, 7u);
+    CHECK("%.*s", -1, "abc");
+    /* Literal precision, including the one the audit used. */
+    CHECK("%.128d", 42);
+    CHECK("%.33d", 42);
+    CHECK("%.112u", 42);
+    CHECK("%.0d", 0);
+    CHECK("%.0u", 0u);
+}
+
 int main(void) {
     fixed_cases();
     integer_cases();
+    precision_cases();
     printf("printf diff: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
