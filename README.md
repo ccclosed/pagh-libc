@@ -43,6 +43,13 @@ stack buffer (arbitrary-length precision is emitted directly into the field).
 
 Version **0.15.1** (`VERSION`, tag `v0.15.1`).
 
+## Branching and releases
+
+`main` is the stable branch; `dev` is the experimental integration branch. Feature
+and fix PRs target `dev`; stable releases are tagged from `main`, release
+candidates/pre-releases from `dev` (`vX.Y.Z-rc.N`). The release workflow refuses a
+tag cut from the wrong branch. See [BRANCHING.md](BRANCHING.md).
+
 ## Build the toolchain
 
 The build expects `riscv-none-elf-gcc` (xPack GCC 15+) on `PATH`, or set
