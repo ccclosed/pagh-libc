@@ -11,6 +11,8 @@
 #include <stdlib.h>
 
 int pagh_snprintf(char *buf, unsigned long size, const char *fmt, ...);
+int pagh_sprintf(char *buf, const char *fmt, ...);
+int pagh_vsprintf(char *buf, const char *fmt, va_list ap);
 
 /* The library's stdio only needs this for printf/puts, which this test never
  * calls through the renamed entry points; the linker wants the symbol. */
@@ -38,6 +40,30 @@ static void compare(const char *what, const char *fmt, const char *got, int ngot
     int na = pagh_snprintf(a, sizeof a, fmt, __VA_ARGS__); \
     int nb = snprintf(b, sizeof b, fmt, __VA_ARGS__); \
     compare("value", fmt, a, na, b, nb); \
+} while (0)
+
+/* sprintf has no size argument; the pagh formatter must produce exactly what
+ * snprintf (with a large buffer) produces, return value included. */
+#define CHECK_SPRINTF(fmt, ...) do { \
+    char a[600], b[600]; \
+    int na = pagh_sprintf(a, fmt, __VA_ARGS__); \
+    int nb = snprintf(b, sizeof b, fmt, __VA_ARGS__); \
+    compare("sprintf", fmt, a, na, b, nb); \
+} while (0)
+
+static int call_vsprintf(char *buf, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = pagh_vsprintf(buf, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+#define CHECK_VSPRINTF(fmt, ...) do { \
+    char a[600], b[600]; \
+    int na = call_vsprintf(a, fmt, __VA_ARGS__); \
+    int nb = snprintf(b, sizeof b, fmt, __VA_ARGS__); \
+    compare("vsprintf", fmt, a, na, b, nb); \
 } while (0)
 
 static uint64_t rng_state = 0x9e3779b97f4a7c15ULL;

@@ -29,9 +29,13 @@ applies only a fixed `TZ` offset — no tzdata, no DST) and `strftime` over the
 basic C/POSIX conversions. The ABI's only clock is the kernel **uptime**
 counter (`clock_gettime(0)` is "realtime/uptime"; there is no RTC syscall), so
 `time()` is seconds since boot and a fresh boot formats as 1970-01-01 +
-uptime. That limit is stated, not papered over.
+uptime. That limit is stated, not papered over. **0.15.0** triages stdio and
+fills the formatted-input gap: `sscanf`/`vsscanf`, `scanf`/`vscanf`,
+`fscanf`/`vfscanf` over the C/POSIX conversion set (`d i o u x X c s [ ] p n
+f e g %%`, `*` suppression, width, hh/h/l/ll/z/j/t), plus the
+`sprintf`/`vsprintf`/`vprintf` wrappers the printf family was missing.
 
-Version **0.14.0** (`VERSION`, tag `v0.14.0`).
+Version **0.15.0** (`VERSION`, tag `v0.15.0`).
 
 ## Build the toolchain
 
@@ -75,13 +79,15 @@ run /mnt/dns_lookup example.com    # over /etc/resolv.conf (or @A.B.C.D[:port])
 run /mnt/float_printf              # %f/%e/%g and FPU arithmetic
 run /mnt/getline                   # getline/getdelim on a real ext2 file
 run /mnt/timefmt                   # clock/gmtime_r/localtime_r/strftime
+run /mnt/scan                      # sscanf/fscanf/sprintf on a real ext2 file
 ```
 
 `tools/live-dlopen.sh` builds the disk and drives the dlopen test through a
 pagh-riscv checkout's `tools/run.py`; `tools/live-sockets.py` does the same for
 sockets, DNS and `%f`, with host peers, `tools/live-getline.py` for the
-getline/getdelim file round-trip and `tools/live-timefmt.py` for the time
-helpers (see *Live evidence* below).
+getline/getdelim file round-trip, `tools/live-timefmt.py` for the time
+helpers and `tools/live-scan.py` for formatted input (see *Live evidence*
+below).
 
 ## Status
 
@@ -93,7 +99,7 @@ helpers (see *Live evidence* below).
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strtok_r`/`strsep` (+ `strspn`/`strcspn`), `strerror`; `perror` in stdio |
 | stdlib | `malloc/calloc/realloc/free`, `qsort`, `bsearch`, `atoi/atol/abs`, `atexit`/`exit`/`abort` |
 | cli | `include/getopt.h`: `getopt`, `getopt_long`, `getopt_long_only`, `struct option`, `no_argument`/`required_argument`/`optional_argument`, the `optarg`/`optind`/`opterr`/`optopt` globals; argv permutation, `+`/`-`/`:` prefixes, `--` terminator and long-option abbreviations behave like the host libc's |
-| stdio | `printf/fprintf/snprintf/vsnprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering, `getline`/`getdelim`, `feof`/`ferror`/`clearerr`; **`%f %e %g`** (exact IEEE-754 digits, half-even rounding), flags `- + space # 0`, `*` and `l/ll/h/hh/z` |
+| stdio | `printf/vprintf/fprintf/snprintf/vsnprintf/sprintf/vsprintf/puts/fputs/putchar/getchar`, `FILE`, `fopen/fclose/fflush/fread/fwrite/fgets/fputs/fprintf` with 4 KiB buffering, `getline`/`getdelim`, `feof`/`ferror`/`clearerr`; **`sscanf/vsscanf/scanf/vscanf/fscanf/vfscanf`** (`d i o u x X c s [ ] p n f e g %%`, `*`, width, hh/h/l/ll/z/j/t); **`%f %e %g`** on output (exact IEEE-754 digits, half-even rounding), flags `- + space # 0`, `*` and `l/ll/h/hh/z` |
 | sockets | `include/sys/socket.h`: `socket/bind/listen/accept/connect/send/sendto/recv/recvfrom/setsockopt/getsockopt/shutdown`, `struct sockaddr_in`, `AF_INET`, `SOCK_STREAM`, `SOCK_DGRAM`, `SOCK_NONBLOCK`, `MSG_DONTWAIT`, `INADDR_ANY`; `htons/htonl/ntohs/ntohl`, `inet_aton/inet_addr/inet_ntoa/inet_pton/inet_ntop`; errors are the kernel's errno |
 | dns | `include/netdb.h`: `gethostbyname`, `getaddrinfo` (A only), `freeaddrinfo`, `gai_strerror`, `hstrerror`, `h_errno`; one A query over UDP to the DHCP server named in `resolv.conf` (plus `pagh_resolv_set_server`/`pagh_resolv_server`/`pagh_resolv_source`) |
 | tls | `include/pagh_tls.h`: `getrandom`, `pagh_tls_connect`/`pagh_tls_write`/`pagh_tls_read`/`pagh_tls_close` over kernel 1100-1103, `https_get`; the handshake and its fail-closed verification (CA-bundle chain, SAN, clock window, `CertificateVerify`) run in the kernel and cannot be disabled from userland |
@@ -126,7 +132,19 @@ millisecond uptime (`pagh-riscv` returns the same counter for both), and the
 ABI has no RTC/wall-clock syscall, so `time()`/`gettimeofday()` are seconds
 since boot — the RTC exists in the kernel only for the TLS certificate clock
 gate. `gmtime_r` formats that value as Unix seconds, i.e. 1970-01-01 + uptime;
-`strftime` is correct relative to that pseudo-epoch. `localtime_r` has no
+`strftime` is correct relative to that pseudo-epoch.
+
+**stdio triage (0.15.0).** Input formatting was the one big printf-family
+gap: `sscanf`/`vsscanf`, `scanf`/`vscanf` and `fscanf`/`vfscanf` now exist
+over the conversion set named in `<stdio.h>`, and `sprintf`/`vsprintf`/
+`vprintf` complete the output side. What is still absent is documented rather
+than hidden: `fseek`/`ftell`/`rewind`/`fgetpos`/`fsetpos`, `ungetc`, the
+`getc`/`putc` aliases, `setvbuf`/`setbuf`, `remove`/`rename` (`<stdio.h>`
+forms; `<unistd.h>`'s work), `tmpfile`, `popen`/`pclose` and wide-character
+stdio. In the scanner: wide conversions, `%L` long double, `%a` hex floats,
+C23 `%b` and locales are unsupported (matching failure), and `%f`/`%e`/`%g`
+are correctly rounded only for up to 15 significant digits with a decimal
+exponent within +-22 (beyond that they use accumulated double arithmetic). `localtime_r` has no
 timezone database (no `/etc/localtime`, no tzdata): it applies only a fixed
 POSIX standard-time offset from `TZ` (`UTC`, `MSK-3`, `EST5`, `UTC+2`, ...);
 DST rules and zone names fall back to UTC. `mktime`/`timegm`, `%z` and the GNU
@@ -488,6 +506,14 @@ Earlier milestones' transcripts remain in `docs/live-dynamic*.txt` and
 
 ## Live evidence
 
+[`docs/live-scan.txt`](docs/live-scan.txt) is the committed transcript of one
+`tools/live-scan.py` run: the guest writes a record file on the ext2 image,
+parses it with `fgets`+`sscanf` (`%d %d %lf %31s%n`, %n offsets and sums
+checked) and again with `fscanf`, checks a `sprintf` round-trip, and exercises
+EOF vs matching failure, suppression, scansets and `%i`. It ends with
+`scan: ok (fgets+sscanf, sprintf, fscanf, edge semantics)` and
+`run: /mnt/scan exited with code 0`.
+
 [`docs/live-timefmt.txt`](docs/live-timefmt.txt) is the committed transcript of
 one `tools/live-timefmt.py` run: `clock_gettime`/`time`/`gettimeofday` agree
 within a second (on a fresh boot the ABI's uptime clock is near zero, which the
@@ -537,6 +563,7 @@ tools/host-tests.sh        # printf/getopt/libc differential + DNS/HTTP/errno, h
 PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-getline.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-timefmt.py
+PAGH_RISCV=../pagh-riscv python3 tools/live-scan.py
 ```
 
 The committed transcript was captured with `qemu-system-riscv64` 10.2.2, xPack
