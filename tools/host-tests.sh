@@ -1,7 +1,8 @@
 #!/bin/sh
 # Host tests: run the pure library code on the build host, against the host's
 # libc (differential printf/sprintf, getopt family, bsearch/tokenizers/memchr,
-# time/strftime, sscanf/vsscanf/fscanf) and against hand-built DNS and HTTP
+# time/strftime, sscanf/vsscanf/fscanf), under AddressSanitizer for the
+# integer width/precision bounds, and against hand-built DNS and HTTP
 # messages, plus a synthetic-stream test for getline/getdelim and a table check
 # that every errno the header defines has a strerror() text.
 #
@@ -30,6 +31,21 @@ $CC -O2 -Iinclude -Dprintf=pagh_printf -Dsnprintf=pagh_snprintf \
 $CC -O2 -Iinclude -c src/float.c -o build/host_float.o
 $CC build/host_printf_test.o build/host_stdio.o build/host_float.o -o build/host_printf_test
 ./build/host_printf_test
+
+echo "== printf precision bounds (ASAN: %.*d cannot overrun the digit buffer) =="
+# Same renames as above, but the formatter is compiled with AddressSanitizer so
+# a stack-buffer-overflow in the integer precision path fails the gate instead
+# of corrupting the test's own caller.  This is the F-rt-2 regression test.
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
+    -Dprintf=pagh_printf -Dsnprintf=pagh_snprintf \
+    -c src/stdio.c -o build/host_stdio_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
+    -c src/float.c -o build/host_float_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
+    -c tests/printf_safety_test.c -o build/host_printf_safety_test.o
+$CC -fsanitize=address build/host_printf_safety_test.o \
+    build/host_stdio_asan.o build/host_float_asan.o -o build/host_printf_safety_test
+./build/host_printf_safety_test
 
 echo "== DNS message test (build/parse, compression, negative cases) =="
 $CC -O2 -Iinclude tests/dns_test.c src/dns.c -o build/host_dns_test

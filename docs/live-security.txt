@@ -1,0 +1,152 @@
+# Live security acceptance for pagh-libc (runtime audit F-rt-1/F-rt-2/F-rt-3)
+# F-rt-1: ld-pagh SHN_ABS __pagh_dl_state cannot become an arbitrary store
+# F-rt-2: vsnprintf integer precision past the 32-byte digit buffer
+# F-rt-3: PT_DYNAMIC p_vaddr/p_memsz validated against the image
+# kernel: /home/oleg/pagh-riscv/target/riscv64gc-unknown-none-elf/release/pagh
+# kernel checkout: /home/oleg/pagh-riscv (revision aa8f1a9 (dirty), crate 0.24.1)
+# kernel sha256: b41593e326c07c4ba3077e3d0a15dadb5145894dbf72632758509ff0f6d2479f
+# pagh-libc: 0.15.1 (VERSION), revision 2699113 (dirty)
+# host: QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)
+# image: mke2fs -t ext2 -b 1024 -d <root with build/*.elf, build/*.so, tests/security/make_evil_elf.py objects> disk.img
+# guest commands:
+#   run /mnt/ld-pagh /mnt/hello_dyn
+#   run /mnt/ld-pagh /mnt/evil_state_abs
+#   run /mnt/ld-pagh /mnt/evil_state_abs_bss
+#   run /mnt/ld-pagh /mnt/evil_dyn_out
+#   run /mnt/ld-pagh /mnt/evil_dyn_big
+#   run /mnt/ld-pagh /mnt/evil_dyn_unaligned
+#   run /mnt/ld-pagh /mnt/evil_dyn_memsz
+#   run /mnt/printf_bounds
+
+OpenSBI v1.7
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name               : riscv-virtio,qemu
+Platform Features           : medeleg
+Platform HART Count         : 1
+Platform IPI Device         : aclint-mswi
+Platform Timer Device       : aclint-mtimer @ 10000000Hz
+Platform Console Device     : uart8250
+Platform HSM Device         : ---
+Platform PMU Device         : ---
+Platform Reboot Device      : syscon-reboot
+Platform Shutdown Device    : syscon-poweroff
+Platform Suspend Device     : ---
+Platform CPPC Device        : ---
+Firmware Base               : 0x80000000
+Firmware Size               : 317 KB
+Firmware RW Offset          : 0x40000
+Firmware RW Size            : 61 KB
+Firmware Heap Offset        : 0x46000
+Firmware Heap Size          : 37 KB (total), 2 KB (reserved), 11 KB (used), 23 KB (free)
+Firmware Scratch Size       : 4096 B (total), 1400 B (used), 2696 B (free)
+Runtime SBI Version         : 3.0
+Standard SBI Extensions     : time,rfnc,ipi,base,hsm,srst,pmu,dbcn,fwft,legacy,dbtr,sse
+Experimental SBI Extensions : none
+
+Domain0 Name                : root
+Domain0 Boot HART           : 0
+Domain0 HARTs               : 0*
+Domain0 Region00            : 0x0000000000100000-0x0000000000100fff M: (I,R,W) S/U: (R,W)
+Domain0 Region01            : 0x0000000010000000-0x0000000010000fff M: (I,R,W) S/U: (R,W)
+Domain0 Region02            : 0x0000000002000000-0x000000000200ffff M: (I,R,W) S/U: ()
+Domain0 Region03            : 0x0000000080040000-0x000000008004ffff M: (R,W) S/U: ()
+Domain0 Region04            : 0x0000000080000000-0x000000008003ffff M: (R,X) S/U: ()
+Domain0 Region05            : 0x000000000c400000-0x000000000c5fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region06            : 0x000000000c000000-0x000000000c3fffff M: (I,R,W) S/U: (R,W)
+Domain0 Region07            : 0x0000000000000000-0xffffffffffffffff M: () S/U: (R,W,X)
+Domain0 Next Address        : 0x0000000080200000
+Domain0 Next Arg1           : 0x000000008fe00000
+Domain0 Next Mode           : S-mode
+Domain0 SysReset            : yes
+Domain0 SysSuspend          : yes
+
+Boot HART ID                : 0
+Boot HART Domain            : root
+Boot HART Priv Version      : v1.12
+Boot HART Base ISA          : rv64imafdch
+Boot HART ISA Extensions    : sstc,zicntr,zihpm,zicboz,zicbom,sdtrig,svadu
+Boot HART PMP Count         : 16
+Boot HART PMP Granularity   : 2 bits
+Boot HART PMP Address Bits  : 54
+Boot HART MHPM Info         : 16 (0x0007fff8)
+Boot HART Debug Triggers    : 2 triggers
+Boot HART MIDELEG           : 0x0000000000001666
+Boot HART MEDELEG           : 0x0000000000f4b509
+framebuffer  ramfb 1280x800 stride 5120 cells 100x37
+
+========================================
+   pagh OS — RISC-V (RV64)
+========================================
+boot hart   0
+device tree 0x8fe00000
+memory      0x80000000..0x90000000 (256 MiB)
+timebase    10000000 Hz
+console     NS16550 @ 0x10000000
+pmm         62601/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
+sv39        on, satp=0x8000000000080b75, identity 0x80000000..0x90000000 (RWX below 0x80b75000, RW above), 65549 pages, 13 device
+rtc         goldfish @ 0x101000 - 2026-11-13 18:03:28 UTC
+rtc         raw 0x2b708188 0x18e7acd5 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+entropy     32 bytes from /chosen/rng-seed - TLS session keys available
+timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
+plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
+task        16 slots, 24 KiB stack + 4 KiB guard, quantum 8 ticks, timer clock
+virtio-blk: virtio-blk0 at 0x10008000: 32768 sectors (16 MiB)
+virtio-input: no device
+fs          virtio-blk0 (32768 sectors, 16384 KiB)
+fs          ext2 on /mnt, 1024 B blocks, 14305/16384 blocks free, 4045/4096 inodes free
+virtio-net: no device
+net         no network device
+
+Type 'help' for the command list.
+
+pagh:rv64> run /mnt/ld-pagh /mnt/hello_dyn
+hello from a dynamically linked C program
+argc=1 argv0=/mnt/hello_dyn extra=42
+libplugdep: DT_INIT_ARRAY dep_global=40
+libplug: DT_INIT
+libplug: DT_INIT_ARRAY extra_global=40
+dlopen: plug_value=42
+dlopen: second dlopen reuses the handle, init count still 2
+dlopen: dlsym(handle) dep_answer=42
+dlopen: RTLD_LOCAL group hidden from RTLD_DEFAULT
+libglobal: DT_INIT_ARRAY
+dlopen: RTLD_GLOBAL global_answer=77
+liblate: DT_INIT_ARRAY global_answer=77
+dlopen: later plugin resolved the RTLD_GLOBAL symbol
+dlopen: RTLD_LOCAL-only symbol rejected: unresolved symbol dep_answer
+dlopen: unsupported relocation rejected: unsupported relocation type 999
+dlopen: RTLD_DEFAULT interpose_value=1, RTLD_NEXT interpose_value=2
+dlopen: RTLD_NEXT skips RTLD_LOCAL-only symbols
+dlopen: RTLD_GLOBAL promotes an already-loaded group
+run: /mnt/ld-pagh exited with code 0
+pagh:rv64> run /mnt/ld-pagh /mnt/evil_state_abs
+run: /mnt/ld-pagh exited with code 0
+pagh:rv64> run /mnt/ld-pagh /mnt/evil_state_abs_bss
+run: /mnt/ld-pagh exited with code 0
+pagh:rv64> run /mnt/ld-pagh /mnt/evil_dyn_out
+ld-pagh: malformed ELF: PT_DYNAMIC outside the image in /mnt/evil_dyn_out
+run: /mnt/ld-pagh exited with code 1
+pagh:rv64> run /mnt/ld-pagh /mnt/evil_dyn_big
+ld-pagh: malformed ELF: PT_DYNAMIC outside the image in /mnt/evil_dyn_big
+run: /mnt/ld-pagh exited with code 1
+pagh:rv64> run /mnt/ld-pagh /mnt/evil_dyn_unaligned
+ld-pagh: malformed ELF: unaligned PT_DYNAMIC in /mnt/evil_dyn_unaligned
+run: /mnt/ld-pagh exited with code 1
+pagh:rv64> run /mnt/ld-pagh /mnt/evil_dyn_memsz
+ld-pagh: malformed ELF: unaligned PT_DYNAMIC in /mnt/evil_dyn_memsz
+run: /mnt/ld-pagh exited with code 1
+pagh:rv64> run /mnt/printf_bounds
+printf_bounds: precision 3..112, 128, 200, 1000 ok (115 cases)
+printf_bounds: %.*x/negative precision ok
+printf_bounds: width/precision bounds ok (no per-byte stack write)
+printf_bounds: ok (12 checks)
+run: /mnt/printf_bounds exited with code 0
+pagh:rv64> 

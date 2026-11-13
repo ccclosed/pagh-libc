@@ -34,8 +34,14 @@ fills the formatted-input gap: `sscanf`/`vsscanf`, `scanf`/`vscanf`,
 `fscanf`/`vfscanf` over the C/POSIX conversion set (`d i o u x X c s [ ] p n
 f e g %%`, `*` suppression, width, hh/h/l/ll/z/j/t), plus the
 `sprintf`/`vsprintf`/`vprintf` wrappers the printf family was missing.
+**0.15.1** is the security patch from the runtime audit (F-rt-1/2/3, below):
+`ld-pagh` no longer lets an object's symbol table choose where its
+`__pagh_dl_state` pointer is stored, rejects `SHN_ABS`/out-of-image symbol
+values and `PT_DYNAMIC` tables that leave the mapped image, and `vsnprintf`'s
+integer precision path no longer writes the zero extension into a 32-byte
+stack buffer (arbitrary-length precision is emitted directly into the field).
 
-Version **0.15.0** (`VERSION`, tag `v0.15.0`).
+Version **0.15.1** (`VERSION`, tag `v0.15.1`).
 
 ## Build the toolchain
 
@@ -504,7 +510,86 @@ overridden with `KERNEL=...`.
 Earlier milestones' transcripts remain in `docs/live-dynamic*.txt` and
 `docs/live-dlopen-0.9.0.txt`.
 
+## Security hardening (0.15.1)
+
+Three findings from the pagh-riscv runtime audit (`Pagh-OS/attack/runtime`,
+owner kostya-runtime) are fixed here. Each has a regression test that fails on
+the pre-fix tree, and the PoC sources were copied into this repository (the
+attack directory itself is untouched).
+
+**F-rt-1 — `ld-pagh` stored its state pointer through a file-chosen symbol.**
+`__pagh_dl_run()` resolved `__pagh_dl_state` through the *global* symbol scope,
+which includes the ET_DYN the loader was asked to run, and then did
+`*slot = st`. For an `SHN_ABS` symbol `resolve_in()` returned `st_value`
+verbatim, so an object that merely defined `__pagh_dl_state` as an absolute
+symbol got an arbitrary-address store in the loader's address space before any
+of its code ran (audit PoCs: `0x4141414141414141`, and `dl_state.objs[0].base`
+→ control flow into the corrupted object table). Now:
+
+- the publish search skips object 0 (the object being run: its `.dynsym` is
+  untrusted input, and it is not the exporter of the runtime's state
+  variable), and accepts only a defined, non-`SHN_ABS`, pointer-aligned
+  `STT_OBJECT` slot inside the *exporting* object's own writable `PT_LOAD`.
+  An object cannot make the loader write to an address it does not own; if no
+  loaded object exports a usable slot (statically linked program) nothing is
+  published, which is exactly the old behaviour for that case;
+- `resolve_in()` now rejects `SHN_ABS` values outside the defining object's
+  image and section-relative values outside the mapped image, so a malformed
+  symbol table cannot hand out an arbitrary address to a relocation either.
+
+**F-rt-2 — `vsnprintf` integer precision overran a 32-byte stack buffer.**
+`%d`/`%u`/`%x`/`%o` with a precision above the digit count did
+`memmove(text + precision - n, …)` inside `char text[32]`, so
+`snprintf(buf, n, "%.*d", 128, 42)` overwrote the frame's saved `ra` with
+`"00000042"` (the library is built `-fno-stack-protector`); precisions 33..112
+corrupted silently. The zero extension is now emitted straight into the output
+field (`out_fill()`, which is also used for width padding, so an
+attacker-sized width/precision stays constant-time), the digit buffer is only
+ever written by `utoa()`, and literal widths/precisions saturate instead of
+overflowing `int` (`"%.9999999999d"` is not signed-overflow UB any more). The
+output still matches glibc byte-for-byte, including `%#o` with precision and
+negative precision meaning "omitted".
+
+**F-rt-3 — `PT_DYNAMIC` was dereferenced without bounds checks.**
+`dyn_value()`/`collect_needed()` read `base + p_vaddr` as a `unsigned long`
+array bounded by the file's `p_memsz`, so a crafted 369-byte ET_DYN made the
+loader read at `0x4141414171414141` (base + attacker offset). `load_object()`
+now validates every `PT_DYNAMIC` before mapping: `p_vaddr`/`p_memsz` must lie
+inside the aligned image and both must be 8-byte aligned; a violation is
+reported as `ld-pagh: malformed ELF: PT_DYNAMIC outside the image` /
+`unaligned PT_DYNAMIC` and the load is refused (exit status 1) instead of
+faulting. `dyn_value()`/`collect_needed()` go through one validated
+`dynamic_table()` accessor, and the 8-byte bounds check remains as defence in
+depth.
+
+Evidence: `tests/printf_test.c` now sweeps integer precision 0..511 (including
+the audit's 33..112 and 128) differentially against glibc, and
+`tests/printf_safety_test.c` runs the same shapes under AddressSanitizer in
+`tools/host-tests.sh` (it reports the exact `text[32]` overflow on the unfixed
+formatter). `tests/security/make_evil_elf.py` generates the crafted objects for
+`tools/live-security.py`, whose committed transcript
+[`docs/live-security.txt`](docs/live-security.txt) shows the fixed guest
+running the hostile object and exiting 0, refusing the four malformed
+`PT_DYNAMIC` objects with a diagnosis, and the `printf_bounds` program passing
+its precision checks. On the pre-fix tree the same script produces
+`store page fault (stval=0x4141414141414141)`,
+`instruction page fault (stval=0x3234303030303030)` and
+`load page fault (stval=0x4141414171414141)` — the three audit crashes.
+
 ## Live evidence
+
+[`docs/live-security.txt`](docs/live-security.txt) is the committed transcript
+of one `tools/live-security.py` run: the ext2 image carries `ld-pagh`, the
+shared objects and the objects generated by `tests/security/make_evil_elf.py`;
+the harness drives eight guest programs (it needs several commands, so it types
+them into the kernel's serial console one prompt at a time instead of using
+`run.py --keys`). It shows the full dlopen regression still passing
+(`run: /mnt/ld-pagh exited with code 0`), the two `__pagh_dl_state`-hostile
+objects `run: /mnt/ld-pagh exited with code 0` (the audit's arbitrary store
+would have killed the loader before their entry stub), four malformed
+`PT_DYNAMIC` objects refused with `ld-pagh: malformed ELF: …` and exit status
+1, and `printf_bounds: ok` after the precision sweep. The header records the
+kernel/libc revisions and SHA-256, so the run can be reproduced or falsified.
 
 [`docs/live-scan.txt`](docs/live-scan.txt) is the committed transcript of one
 `tools/live-scan.py` run: the guest writes a record file on the ext2 image,
@@ -559,11 +644,12 @@ What it shows, per feature (exact lines from the transcript):
 
 ```sh
 ./build.sh                 # cross toolchain needed
-tools/host-tests.sh        # printf/getopt/libc differential + DNS/HTTP/errno, host-only
+tools/host-tests.sh        # printf(+ASAN precision)/getopt/libc differential + DNS/HTTP/errno, host-only
 PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-getline.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-timefmt.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-scan.py
+PAGH_RISCV=../pagh-riscv python3 tools/live-security.py
 ```
 
 The committed transcript was captured with `qemu-system-riscv64` 10.2.2, xPack

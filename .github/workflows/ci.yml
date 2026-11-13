@@ -2,9 +2,10 @@ name: ci
 
 # The two gates this repository documents in its README:
 #
-#   ./tools/host-tests.sh   host-only differential tests (printf, getopt,
-#                           libc helpers, getline, time/strftime,
-#                           scanf/sprintf; DNS/HTTP framing; errno)
+#   ./tools/host-tests.sh   host-only differential tests (printf incl. ASAN
+#                           precision bounds, getopt, libc helpers, getline,
+#                           time/strftime, scanf/sprintf; DNS/HTTP framing;
+#                           errno)
 #   ./build.sh              the cross build of the library + every example
 #
 # The cross build needs two pinned tools: the xPack RISC-V GCC the README names
