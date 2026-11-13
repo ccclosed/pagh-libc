@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Live security acceptance for the pagh-libc runtime audit fixes.
 
-Three findings from `Pagh-OS/attack/runtime` are exercised on the pagh-riscv
-guest, against a real kernel and the real `ld-pagh`/`libpagh-c` build:
+Four findings from the pagh round-1 and round-2 runtime audits are exercised
+on the pagh-riscv guest, against a real kernel and the real `ld-pagh`/
+`libpagh-c` build:
 
 * **F-rt-1** — an ET_DYN that defines `__pagh_dl_state` as an `SHN_ABS` symbol
   must not turn the loader's `*slot = st` into a store to a file-chosen
@@ -18,6 +19,15 @@ guest, against a real kernel and the real `ld-pagh`/`libpagh-c` build:
   or are unaligned must be rejected as a malformed ELF, not dereferenced; the
   audit's 369-byte `evil_arbread_dynamic.elf` used `p_vaddr =
   0x4141414141414141`.
+* **F-r2-libc-1** — the loader validates where the dynamic table is but used
+  to call the *values* in `DT_INIT`/`DT_INIT_ARRAY` unchecked, so a crafted
+  ET_DYN put a file-chosen word in the loader's PC (0x4141414141414141), or
+  used an `R_RISCV_RELATIVE`/`SHN_ABS` relocation to plant a file-chosen
+  address in a writable `.init_array`, before the entry point was even
+  checked.  `tests/security/make_init_evil.py` generates the three audit
+  objects; the fixed loader must refuse each with
+  `malformed ELF: unsafe DT_INIT_ARRAY` / `SHN_ABS symbol outside the image`
+  and exit 1 instead of faulting.
 
 The harness boots the pagh-riscv kernel with the same QEMU configuration as
 the kernel's own ``tools/run.py`` (the kernel repository is never modified),
@@ -110,6 +120,27 @@ COMMANDS = (
         "run /mnt/ld-pagh /mnt/evil_dyn_memsz",
         (
             "ld-pagh: malformed ELF: unaligned PT_DYNAMIC",
+            "run: /mnt/ld-pagh exited with code 1",
+        ),
+    ),
+    (
+        "run /mnt/ld-pagh /mnt/evil_call_abs.elf",
+        (
+            "ld-pagh: malformed ELF: unsafe DT_INIT_ARRAY",
+            "run: /mnt/ld-pagh exited with code 1",
+        ),
+    ),
+    (
+        "run /mnt/ld-pagh /mnt/evil_call_rel.elf",
+        (
+            "ld-pagh: malformed ELF: unsafe DT_INIT_ARRAY",
+            "run: /mnt/ld-pagh exited with code 1",
+        ),
+    ),
+    (
+        "run /mnt/ld-pagh /mnt/evil_call_absrel.elf",
+        (
+            "ld-pagh: malformed ELF: SHN_ABS symbol outside the image",
             "run: /mnt/ld-pagh exited with code 1",
         ),
     ),
@@ -409,6 +440,21 @@ def main() -> int:
             file=sys.stderr,
         )
 
+        # F-r2-libc-1: file-chosen constructor/fini call targets.
+        make_init = ROOT / "tests" / "security" / "make_init_evil.py"
+        init_run = subprocess.run(
+            [sys.executable, str(make_init), str(diskroot)],
+            capture_output=True, text=True,
+        )
+        if init_run.returncode != 0:
+            print(init_run.stdout, file=sys.stderr)
+            print(init_run.stderr, file=sys.stderr)
+            die("could not craft the F-r2-libc-1 constructor objects")
+        print(
+            "live-security: crafted evil_call_abs/rel/absrel",
+            file=sys.stderr,
+        )
+
         disk = work / "disk.img"
         make = subprocess.run(
             [
@@ -438,17 +484,18 @@ def main() -> int:
 
         header = "\n".join(
             [
-                "# Live security acceptance for pagh-libc (runtime audit F-rt-1/F-rt-2/F-rt-3)",
+                "# Live security acceptance for pagh-libc (runtime audits F-rt-1/F-rt-2/F-rt-3, F-r2-libc-1)",
                 "# F-rt-1: ld-pagh SHN_ABS __pagh_dl_state cannot become an arbitrary store",
                 "# F-rt-2: vsnprintf integer precision past the 32-byte digit buffer",
                 "# F-rt-3: PT_DYNAMIC p_vaddr/p_memsz validated against the image",
+                "# F-r2-libc-1: DT_INIT/DT_INIT_ARRAY/FINI targets validated; SHN_ABS relocation bounded",
                 f"# kernel: {kernel}",
                 f"# kernel checkout: {kernel_repo} (revision {git_revision(kernel_repo)}, crate {crate_version(kernel_repo)})",
                 f"# kernel sha256: {kernel_sha}",
                 f"# pagh-libc: {libc_version()} (VERSION), revision {git_revision(ROOT)}",
                 f"# host: {qemu_version()}",
                 "# image: mke2fs -t ext2 -b 1024 -d <root with build/*.elf, build/*.so, "
-                "tests/security/make_evil_elf.py objects> disk.img",
+                "tests/security/make_evil_elf.py and make_init_evil.py objects> disk.img",
                 "# guest commands:",
                 "\n".join(f"#   {command}" for command, _ in COMMANDS),
                 "",

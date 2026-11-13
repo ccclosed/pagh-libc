@@ -40,8 +40,14 @@ f e g %%`, `*` suppression, width, hh/h/l/ll/z/j/t), plus the
 values and `PT_DYNAMIC` tables that leave the mapped image, and `vsnprintf`'s
 integer precision path no longer writes the zero extension into a 32-byte
 stack buffer (arbitrary-length precision is emitted directly into the field).
+**0.15.2** closes the round-2 loader finding F-r2-libc-1: every
+`DT_INIT`/`DT_INIT_ARRAY`/`DT_FINI`/`DT_FINI_ARRAY` call target must be
+file-backed executable code of the same object, the pointer tables themselves
+must be writable data, `SHN_ABS` relocation values must stay inside the
+defining object, and the program's entry point is validated before any
+constructor runs — on the `dlopen()` path too.
 
-Version **0.15.1** (`VERSION`, tag `v0.15.1`).
+Version **0.15.2** (`VERSION`, tag `v0.15.2`).
 
 ## Branching and releases
 
@@ -394,6 +400,15 @@ symbols across the whole tree, and protects every object's pages. Live:
 The loader runs **`DT_INIT` and `DT_INIT_ARRAY` constructors** (dependency order
 first, executable last) before `e_entry`, so a shared library can initialise its
 own state. Live: libextra's constructor sets 7, `extra_answer()` returns 42.
+Both forms are validated before they are called: `DT_INIT` and every non-zero
+`DT_INIT_ARRAY`/`DT_FINI_ARRAY` entry must resolve to file-backed executable
+code inside that object's own `PT_LOAD` (a bss-only exec tail is not enough),
+the pointer tables themselves must live in a writable non-executable data
+segment, and `__pagh_dl_run` checks the executable's entry point before any
+constructor runs. `dlopen()` applies the same validation to a new group before
+its constructors run. A malformed object is refused with
+`ld-pagh: malformed ELF: unsafe DT_INIT_ARRAY …` and exit status 1 instead of
+being called (see [Security hardening (0.15.2)](#security-hardening-0152)).
 
 ## Runtime loading (`dlopen`)
 
@@ -583,20 +598,78 @@ its precision checks. On the pre-fix tree the same script produces
 `instruction page fault (stval=0x3234303030303030)` and
 `load page fault (stval=0x4141414171414141)` — the three audit crashes.
 
+## Security hardening (0.15.2)
+
+**F-r2-libc-1 — `ld-pagh` called file-controlled constructor pointers.** The
+round-2 runtime audit (`Pagh-OS/attack/r2/runtime/rt2`) found that 0.15.1
+validated *where* the dynamic table is but not the *values* it took out of it
+and called. `call_inits()` did `DT_INIT_ARRAY[i]()` verbatim and accepted
+`DT_INIT` whenever the offset was merely `< o->total`; `relocate()`'s
+`SHN_ABS` arm still did `addr = s->value` with no image check (the twin of the
+`resolve_in()` fix in 0.15.1). Constructors also ran before the executable's
+entry point was checked, and through `dlopen()` before the caller saw a handle.
+Two 512-byte PoCs showed the consequence: `evil_call_abs.elf` made the
+loader's `sepc` the file's own 8-byte word (`0x4141414141414140`), and
+`evil_call_rel.elf` used an `R_RISCV_RELATIVE` relocation to put
+`base + 0x180` in `.init_array` and run file-supplied instructions at a
+file-chosen image offset.
+
+Now:
+
+- every `DT_INIT` and non-zero `DT_INIT_ARRAY`/`DT_FINI_ARRAY` entry must point
+  inside an **executable, file-backed** `PT_LOAD` of the same object
+  (`p_filesz`, not the zero-filled bss tail) at an instruction-aligned offset;
+  `DT_FINI` is bounded the same way even though this loader does not call
+  destructors;
+- `.init_array`/`.fini_array` themselves must be a writable, non-executable,
+  file-backed data table. That is the shape real linkers emit, and it is what
+  refuses the RELATIVE-relocation PoC: the file cannot use an executable
+  segment as the place it plants the call target;
+- `relocate()` rejects an `SHN_ABS` value outside the defining object's image
+  (same rule `resolve_in()` applies a name lookup to) and a section-relative
+  symbol value outside it, so no relocation can store a file-chosen address in
+  a pointer slot;
+- `__pagh_dl_run()` validates every object's constructor/fini tables and the
+  executable's entry point **before** the first constructor runs, and
+  `dlopen()` validates a whole new group before running any of its
+  constructors. `call_inits()` re-checks the table immediately before use, in
+  case an earlier constructor wrote a later object's still-writable
+  `.init_array`.
+
+Evidence: `tests/dynload_targets_test.c` (run by `tools/host-tests.sh`) drives
+the validation on synthetic ET_DYN objects: valid `DT_INIT`/`DT_INIT_ARRAY`,
+zero entries, bss-tail and data-segment targets, an array inside the
+executable segment, missing/misaligned `DT_*_ARRAYSZ`, bad `DT_FINI`/
+`DT_FINI_ARRAY`, and `SHN_ABS`/defined-symbol relocation values both inside and
+outside the image. `tests/security/make_init_evil.py` generates the three
+audit objects (absolute word, RELATIVE payload, SHN_ABS-filled array) for
+`tools/live-security.py`; the committed transcript
+[`docs/live-security.txt`](docs/live-security.txt) shows the fixed loader
+refusing all three with `malformed ELF: unsafe DT_INIT_ARRAY` /
+`SHN_ABS symbol outside the image` and exit status 1 (no fault, no jump), while
+the normal `hello_dyn`/`dlopen` run still reaches
+`run: /mnt/ld-pagh exited with code 0`. On the pre-fix tree the same commands
+produce `instruction page fault (stval=0x4141414141414140)` and
+`store page fault (sepc=0x30000184)`, the audit's two control-flow diverts.
+
 ## Live evidence
 
 [`docs/live-security.txt`](docs/live-security.txt) is the committed transcript
 of one `tools/live-security.py` run: the ext2 image carries `ld-pagh`, the
-shared objects and the objects generated by `tests/security/make_evil_elf.py`;
-the harness drives eight guest programs (it needs several commands, so it types
+shared objects and the objects generated by `tests/security/make_evil_elf.py`
+and `tests/security/make_init_evil.py`; the harness drives eleven guest
+programs (it needs several commands, so it types
 them into the kernel's serial console one prompt at a time instead of using
 `run.py --keys`). It shows the full dlopen regression still passing
 (`run: /mnt/ld-pagh exited with code 0`), the two `__pagh_dl_state`-hostile
 objects `run: /mnt/ld-pagh exited with code 0` (the audit's arbitrary store
 would have killed the loader before their entry stub), four malformed
 `PT_DYNAMIC` objects refused with `ld-pagh: malformed ELF: …` and exit status
-1, and `printf_bounds: ok` after the precision sweep. The header records the
-kernel/libc revisions and SHA-256, so the run can be reproduced or falsified.
+1, the three constructor/fini PoCs refused with
+`ld-pagh: malformed ELF: unsafe DT_INIT_ARRAY` /
+`SHN_ABS symbol outside the image` and exit status 1, and `printf_bounds: ok`
+after the precision sweep. The header records the kernel/libc revisions and
+SHA-256, so the run can be reproduced or falsified.
 
 [`docs/live-scan.txt`](docs/live-scan.txt) is the committed transcript of one
 `tools/live-scan.py` run: the guest writes a record file on the ext2 image,

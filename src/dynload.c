@@ -7,6 +7,14 @@
  * calls DT_INIT/DT_INIT_ARRAY.  It now lives in libc so the already-running
  * program can add an object at runtime through `dlopen`.
  *
+ * Dynamic tables are data, never authority: every DT_INIT/DT_INIT_ARRAY (and
+ * DT_FINI/DT_FINI_ARRAY) call target is checked against the defining object's
+ * own executable, file-backed PT_LOAD, the pointer tables themselves must be
+ * writable data, and the program's entry point is validated before any
+ * constructor runs.  This is the F-r2-libc-1 fix: a crafted ET_DYN could
+ * otherwise put a file-chosen 64-bit value in the loader's PC before any
+ * validation of the object had happened.
+ *
  * The loader state is per-process and owned by the loader copy inside the
  * statically linked `ld-pagh`.  That copy publishes a pointer in the shared
  * libc's `__pagh_dl_state` global before any constructors run; `dlopen` and
@@ -73,8 +81,15 @@
 #define DT_NEEDED 1
 #define DT_STRTAB 5
 #define DT_INIT 12
+#define DT_FINI 13
 #define DT_INIT_ARRAY 25
+#define DT_FINI_ARRAY 26
 #define DT_INIT_ARRAYSZ 27
+#define DT_FINI_ARRAYSZ 28
+
+/* p_flags bits (ELF64, the same encoding protect_object() uses). */
+#define PF_X 1
+#define PF_W 2
 
 #define DL_MAX_OBJECTS 16
 #define DL_MAX_DEPS 8
@@ -147,6 +162,10 @@ static void dl_error_set1(const char *fmt, const char *arg) {
 }
 static void dl_error_setu(const char *fmt, unsigned long arg) {
     snprintf(dl_error_buf, sizeof dl_error_buf, fmt, arg);
+    dl_error = dl_error_buf;
+}
+static void dl_error_set2(const char *fmt, const char *arg1, const char *arg2) {
+    snprintf(dl_error_buf, sizeof dl_error_buf, fmt, arg1, arg2);
     dl_error = dl_error_buf;
 }
 
@@ -467,8 +486,33 @@ static int relocate(struct dl_object *o, struct dl_state *st, int idx) {
                 const char *nm = dynstr(&v, s->name);
                 if (!nm) { dl_error_set1("bad symbol name in %s", o->path); return -1; }
                 unsigned long addr;
-                if (s->shndx == SHN_ABS) addr = s->value;
-                else if (s->shndx != SHN_UNDEF) addr = (unsigned long)o->base + s->value;
+                if (s->shndx == SHN_ABS) {
+                    /* An absolute symbol carries an address, not an image
+                     * offset: accept it only when it points inside the object
+                     * that defines it, the same rule resolve_in() applies to
+                     * name lookups.  Without this the SHN_ABS arm was a
+                     * write-what: a file could fill its own .init_array with
+                     * an arbitrary 64-bit value and the constructor call
+                     * would jump there (F-r2-libc-1). */
+                    if (s->value < (unsigned long)o->base ||
+                        s->value - (unsigned long)o->base >= o->total) {
+                        dl_error_set1("malformed ELF: SHN_ABS symbol outside the image in %s",
+                                      o->path);
+                        return -1;
+                    }
+                    addr = s->value;
+                }
+                else if (s->shndx != SHN_UNDEF) {
+                    /* A section-relative value is an image offset; outside the
+                     * mapped image it is a malformed definition, the same rule
+                     * resolve_in() applies. */
+                    if (s->value >= o->total) {
+                        dl_error_set1("malformed ELF: defined symbol outside the image in %s",
+                                      o->path);
+                        return -1;
+                    }
+                    addr = (unsigned long)o->base + s->value;
+                }
                 else {
                     addr = resolve_for(st, idx, nm);
                     if (!addr) { dl_error_set1("unresolved symbol %s", nm); return -1; }
@@ -511,15 +555,148 @@ static unsigned long dyn_value(struct dl_object *o, unsigned long tag) {
     return 0;
 }
 
-static void call_inits(struct dl_object *o) {
+/* The dynamic-table value for `tag`, distinguishing "absent" from "present
+ * with value 0" (the distinction matters for the constructor tables, where
+ * zero means an empty slot but a missing DT_*_ARRAYSZ is malformed). */
+static int dyn_pair(struct dl_object *o, unsigned long tag, unsigned long *val) {
+    unsigned long *d, words;
+    if (!dynamic_table(o, &d, &words)) return 0;
+    for (unsigned long j = 0; j + 1 < words; j += 2) {
+        if (d[j] == tag) { *val = d[j + 1]; return 1; }
+        if (d[j] == DT_NULL) break;
+    }
+    return 0;
+}
+
+/* Is [off, off + len) covered by one PT_LOAD of `o` that both maps those bytes
+ * from the file (p_filesz, not just the zero-filled p_memsz tail) and carries
+ * every bit of `want` in its p_flags?  `off` is always an image offset, never
+ * an absolute address, so nothing here depends on where mmap placed the
+ * object. */
+static int file_segment_range(struct dl_object *o, unsigned long off,
+                              unsigned long len, unsigned int want) {
+    if (!o->base || !o->eh || off > o->total || len > o->total - off) return 0;
+    for (int i = 0; i < o->eh->phnum; i++) {
+        struct phdr *p = (struct phdr *)(o->data + o->eh->phoff + (unsigned long)i * o->eh->phentsize);
+        if (p->type != PT_LOAD || (p->flags & want) != want) continue;
+        if (off < p->vaddr) continue;
+        unsigned long rel = off - p->vaddr;
+        if (rel > p->filesz || len > p->filesz - rel) continue;
+        return 1;
+    }
+    return 0;
+}
+
+/* A constructor, destructor or entry-point target must be executable code that
+ * the file itself supplies: inside an executable PT_LOAD's *file-backed* part
+ * (not its zero-filled bss tail), at an address where an instruction can
+ * start.  `addr` is the absolute value the loader is about to call.  Anything
+ * else is a file-chosen PC outside the code the object actually loaded
+ * (F-r2-libc-1: DT_INIT_ARRAY held 0x4141414141414141, or a relocation filled
+ * it with base + an arbitrary offset). */
+static int exec_call_target(struct dl_object *o, unsigned long addr) {
+    if (!o->base || addr < (unsigned long)o->base) return 0;
+    unsigned long off = addr - (unsigned long)o->base;
+    if (off & 1) return 0; /* RISC-V IALIGN is 16 bits */
+    return file_segment_range(o, off, 2, PF_X);
+}
+
+/* The DT_INIT_ARRAY/DT_FINI_ARRAY slots are data, not code.  The table must be
+ * a writable, file-backed, non-executable part of the object: this is the
+ * .init_array/.fini_array shape real linkers emit, and it keeps the loader
+ * from treating a pointer table embedded in executable bytes as a valid
+ * constructor list.  Writing the table is what relocations do; requiring it to
+ * be non-executable also means a file cannot use an executable segment as the
+ * place where R_RISCV_RELATIVE plants the call target. */
+static int call_table_range(struct dl_object *o, unsigned long off, unsigned long len) {
+    if (!o->base || !o->eh || off > o->total || len > o->total - off) return 0;
+    for (int i = 0; i < o->eh->phnum; i++) {
+        struct phdr *p = (struct phdr *)(o->data + o->eh->phoff + (unsigned long)i * o->eh->phentsize);
+        if (p->type != PT_LOAD || !(p->flags & PF_W) || (p->flags & PF_X)) continue;
+        if (off < p->vaddr) continue;
+        unsigned long rel = off - p->vaddr;
+        if (rel > p->filesz || len > p->filesz - rel) continue;
+        return 1;
+    }
+    return 0;
+}
+
+/* Validate one of the pointer tables named by DT_INIT_ARRAY/DT_FINI_ARRAY.
+ * Every present entry must point at file-backed executable code of this same
+ * object; a zero entry is an empty slot (call_inits() skips it) rather than an
+ * address to jump to.  Absent tables are fine; a table without its matching
+ * size tag (or a size without a table) is malformed. */
+static int validate_call_array(struct dl_object *o, unsigned long tag,
+                               unsigned long sztag, const char *what) {
+    unsigned long arr = 0, sz = 0;
+    int has_arr = dyn_pair(o, tag, &arr);
+    int has_sz = dyn_pair(o, sztag, &sz);
+    if (!has_arr && !has_sz) return 0;
+    if (has_arr && !has_sz) {
+        dl_error_set2("malformed ELF: unsafe %s in %s", what, o->path);
+        return -1;
+    }
+    if (!has_arr && sz) {
+        dl_error_set2("malformed ELF: unsafe %s in %s", what, o->path);
+        return -1;
+    }
+    if (!sz) return 0;
+    if (sz % sizeof(unsigned long) ||
+        arr > o->total || sz > o->total - arr ||
+        !call_table_range(o, arr, sz)) {
+        dl_error_set2("malformed ELF: unsafe %s in %s", what, o->path);
+        return -1;
+    }
+    unsigned long *slots = (unsigned long *)(o->base + arr);
+    for (unsigned long i = 0; i < sz / sizeof(unsigned long); i++) {
+        if (slots[i] && !exec_call_target(o, slots[i])) {
+            dl_error_set2("malformed ELF: unsafe %s in %s", what, o->path);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* The loader must never call a file-supplied address merely because it came
+ * from a dynamic tag.  Check every call target in one object before anything
+ * of it runs: both constructors and the (not yet invoked, but still
+ * file-controlled) destructor tables. */
+static int validate_call_targets(struct dl_object *o) {
+    unsigned long v;
+    if (dyn_pair(o, DT_INIT, &v) && v &&
+        !exec_call_target(o, (unsigned long)o->base + v)) {
+        dl_error_set2("malformed ELF: unsafe %s in %s", "DT_INIT", o->path);
+        return -1;
+    }
+    if (dyn_pair(o, DT_FINI, &v) && v &&
+        !exec_call_target(o, (unsigned long)o->base + v)) {
+        dl_error_set2("malformed ELF: unsafe %s in %s", "DT_FINI", o->path);
+        return -1;
+    }
+    if (validate_call_array(o, DT_INIT_ARRAY, DT_INIT_ARRAYSZ, "DT_INIT_ARRAY") < 0)
+        return -1;
+    if (validate_call_array(o, DT_FINI_ARRAY, DT_FINI_ARRAYSZ, "DT_FINI_ARRAY") < 0)
+        return -1;
+    return 0;
+}
+
+/* Run one object's constructors.  The table is re-validated immediately before
+ * use: every object is validated first, but an earlier constructor can still
+ * write a later object's .init_array while its pages are mapped writable, and
+ * the call target is the one thing that must not be taken on trust.  Returns
+ * -1 with dlerror set instead of calling an unsafe address. */
+static int call_inits(struct dl_object *o) {
+    if (validate_call_targets(o) < 0) return -1;
     unsigned long init = dyn_value(o, DT_INIT);
-    if (init && init < o->total) ((void (*)(void))((unsigned long)o->base + init))();
+    if (init) ((void (*)(void))((unsigned long)o->base + init))();
     unsigned long arr = dyn_value(o, DT_INIT_ARRAY);
     unsigned long sz = dyn_value(o, DT_INIT_ARRAYSZ);
-    if (arr && sz && arr < o->total && sz <= o->total - arr) {
+    if (arr && sz) {
         void (**fns)(void) = (void (**)(void))((unsigned long)o->base + arr);
-        for (unsigned long i = 0; i < sz / sizeof(void *); i++) fns[i]();
+        for (unsigned long i = 0; i < sz / sizeof(void *); i++)
+            if (fns[i]) fns[i]();
     }
+    return 0;
 }
 
 static int file_dir(const char *path, char *out, unsigned long size) {
@@ -667,8 +844,15 @@ void *dlopen(const char *path, int flags) {
         if (relocate(&st->objs[i], st, i) < 0) { unload_group(st, first); return 0; }
     for (int i = first; i < st->count; i++)
         if (protect_object(&st->objs[i]) < 0) { unload_group(st, first); return 0; }
+    /* Every constructor/fini table of the new group is checked before any
+     * constructor runs, so a malformed dependency is refused without leaving
+     * earlier objects' constructors half-executed.  call_inits() re-checks
+     * each table immediately before use. */
+    for (int i = first; i < st->count; i++)
+        if (validate_call_targets(&st->objs[i]) < 0) { unload_group(st, first); return 0; }
     /* Dependencies first, the object that pulled them in last. */
-    for (int i = st->count - 1; i >= first; i--) call_inits(&st->objs[i]);
+    for (int i = st->count - 1; i >= first; i--)
+        if (call_inits(&st->objs[i]) < 0) { unload_group(st, first); return 0; }
     return &st->objs[idx];
 }
 
@@ -740,6 +924,21 @@ int __pagh_dl_run(int argc, char **argv, char **envp) {
     for (int i = 0; i < st->count; i++)
         if (protect_object(&st->objs[i]) < 0) goto fail;
 
+    /* Validate every constructor/fini table and the program's entry point
+     * before a single constructor runs: a file that would not be allowed to
+     * run must not get its chosen code executed first (F-r2-libc-1). */
+    for (int i = 0; i < st->count; i++)
+        if (validate_call_targets(&st->objs[i]) < 0) goto fail;
+    if (exe->eh->entry >= exe->total) {
+        dl_error_set("entry point outside the image");
+        goto fail;
+    }
+    if (!exec_call_target(exe, (unsigned long)exe->base + exe->eh->entry)) {
+        dl_error_set1("malformed ELF: entry point outside an executable segment in %s",
+                      exe->path);
+        goto fail;
+    }
+
     /* Publish this table into whichever loaded shared library exports the
      * variable (libpagh-c.so in a dynamically linked program).  Doing it before
      * the constructors means a constructor may legally call dlopen.  The
@@ -750,8 +949,8 @@ int __pagh_dl_run(int argc, char **argv, char **envp) {
     struct dl_state **slot = dl_state_slot(st);
     if (slot) *slot = st;
 
-    for (int i = st->count - 1; i >= 0; i--) call_inits(&st->objs[i]);
-    if (exe->eh->entry >= exe->total) { dl_error_set("entry point outside the image"); goto fail; }
+    for (int i = st->count - 1; i >= 0; i--)
+        if (call_inits(&st->objs[i]) < 0) goto fail;
     int (*entry)(int, char **, char **) =
         (int (*)(int, char **, char **))((unsigned long)exe->base + exe->eh->entry);
     return entry(argc, argv, envp);
