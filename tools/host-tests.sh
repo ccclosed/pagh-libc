@@ -2,10 +2,12 @@
 # Host tests: run the pure library code on the build host, against the host's
 # libc (differential printf/sprintf, getopt family, bsearch/tokenizers/memchr,
 # time/strftime, sscanf/vsscanf/fscanf), under AddressSanitizer for the
-# integer width/precision bounds, and against hand-built DNS and HTTP
-# messages, plus a synthetic-stream test for getline/getdelim, a synthetic-
-# object test for ld-pagh's constructor call-target validation, and a table
-# check that every errno the header defines has a strerror() text.
+# integer width/precision bounds and the allocator bounds, and against
+# hand-built DNS and HTTP messages, plus a synthetic-stream test for
+# getline/getdelim, a synthetic-brk allocator test (calloc product overflow,
+# malloc rounding, header-tracked realloc, also under AddressSanitizer), a
+# synthetic-object test for ld-pagh's constructor call-target validation, and
+# a table check that every errno the header defines has a strerror() text.
 #
 #   ./tools/host-tests.sh
 #
