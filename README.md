@@ -51,10 +51,18 @@ Version **0.15.2** (`VERSION`, tag `v0.15.2`).
 
 ## Branching and releases
 
-`main` is the stable branch; `dev` is the experimental integration branch. Feature
-and fix PRs target `dev`; stable releases are tagged from `main`, release
-candidates/pre-releases from `dev` (`vX.Y.Z-rc.N`). The release workflow refuses a
-tag cut from the wrong branch. See [BRANCHING.md](BRANCHING.md).
+`main` is the stable branch; `dev` is the experimental integration branch and
+carries the next release version. Feature and fix PRs target `dev`; stable
+releases are tagged `vX.Y.Z` from `main`. The only pre-release channel is the
+release candidate `vX.Y.Z-rc.N` cut from `dev` (never from `main`); there is no
+`-pre.N` channel. The `release` workflow refuses a tag whose branch or base
+version (`VERSION`) does not match and attaches a source archive with a
+`.sha256`. Security hotfixes are the one exception to the flow: `hotfix/*`
+branches from `main`, PRs target `main`, the PATCH tag goes straight to stable
+(no RC), and `main` is then merged back into `dev` with `--no-ff`.
+
+See [BRANCHING.md](BRANCHING.md) for the branch model and
+[RELEASING.md](RELEASING.md) for the checklist.
 
 ## Build the toolchain
 
