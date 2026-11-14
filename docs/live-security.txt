@@ -1,14 +1,15 @@
-# Live security acceptance for pagh-libc (runtime audits F-rt-1/F-rt-2/F-rt-3, F-r2-libc-1)
+# Live security acceptance for pagh-libc (runtime audits F-rt-1/F-rt-2/F-rt-3, F-r2-libc-1, F-r3-rt-2)
 # F-rt-1: ld-pagh SHN_ABS __pagh_dl_state cannot become an arbitrary store
 # F-rt-2: vsnprintf integer precision past the 32-byte digit buffer
 # F-rt-3: PT_DYNAMIC p_vaddr/p_memsz validated against the image
 # F-r2-libc-1: DT_INIT/DT_INIT_ARRAY/FINI targets validated; SHN_ABS relocation bounded
-# kernel: /home/oleg/pagh-riscv/target/riscv64gc-unknown-none-elf/release/pagh
-# kernel checkout: /home/oleg/pagh-riscv (revision a3f3a70 (dirty), crate 0.24.1)
-# kernel sha256: b41593e326c07c4ba3077e3d0a15dadb5145894dbf72632758509ff0f6d2479f
-# pagh-libc: 0.15.2 (VERSION), revision 8ac8cbd (clean)
+# F-r3-rt-2: calloc n*size overflow refused (NULL/ENOMEM); malloc rounding and realloc old-size copied
+# kernel: /tmp/pagh-r3/pagh-0.24.2-debug.elf (pinned with --kernel)
+# kernel checkout: /home/oleg/pagh-riscv (revision 23fe825 (dirty), crate 0.24.2)
+# kernel sha256: fbc761e10c1b4e05c5df301c13e8a47f6229819f31921a5ab3ee907de6ab0ca5
+# pagh-libc: 0.15.3 (VERSION), revision c950ab3 (clean)
 # host: QEMU emulator version 10.2.2 (qemu-10.2.2-1.fc44)
-# image: mke2fs -t ext2 -b 1024 -d <root with build/*.elf, build/*.so, tests/security/make_evil_elf.py and make_init_evil.py objects> disk.img
+# image: mke2fs -t ext2 -b 1024 -d <root with build/*.elf, build/*.so, tests/security/make_evil_elf.py and make_init_evil.py objects, calloc_overflow_victim/alloc_bounds, rec_ok.bin/rec_overflow.bin> disk.img
 # guest commands:
 #   run /mnt/ld-pagh /mnt/hello_dyn
 #   run /mnt/ld-pagh /mnt/evil_state_abs
@@ -21,6 +22,9 @@
 #   run /mnt/ld-pagh /mnt/evil_call_rel.elf
 #   run /mnt/ld-pagh /mnt/evil_call_absrel.elf
 #   run /mnt/printf_bounds
+#   run /mnt/calloc_overflow_victim /mnt/rec_ok.bin
+#   run /mnt/calloc_overflow_victim /mnt/rec_overflow.bin
+#   run /mnt/alloc_bounds
 
 OpenSBI v1.7
    ____                    _____ ____ _____
@@ -94,18 +98,18 @@ device tree 0x8fe00000
 memory      0x80000000..0x90000000 (256 MiB)
 timebase    10000000 Hz
 console     NS16550 @ 0x10000000
-pmm         62601/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
-sv39        on, satp=0x8000000000080b75, identity 0x80000000..0x90000000 (RWX below 0x80b75000, RW above), 65549 pages, 13 device
-rtc         goldfish @ 0x101000 - 2026-11-13 21:48:22 UTC
-rtc         raw 0xfc0c8458 0x18e7b91a 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+pmm         62153/65536 frames free (256 MiB tracked), heap 0 KiB in 0 chunk(s)
+sv39        on, satp=0x8000000000080d35, identity 0x80000000..0x90000000 (RWX below 0x80d35000, RW above), 65549 pages, 13 device
+rtc         goldfish @ 0x101000 - 2026-11-14 05:45:25 UTC
+rtc         raw 0x66e40e50 0x18e7d323 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
 entropy     32 bytes from /chosen/rng-seed - TLS session keys available
 timer       10 ms ticks (100 Hz, timebase 10000000 Hz)
 plic        0xc000000 context 1, uart irq 10 (rx interrupt on)
-task        16 slots, 24 KiB stack + 4 KiB guard, quantum 8 ticks, timer clock
+task        16 slots, 96 KiB stack + 4 KiB guard, quantum 8 ticks, timer clock
 virtio-blk: virtio-blk0 at 0x10008000: 32768 sectors (16 MiB)
 virtio-input: no device
 fs          virtio-blk0 (32768 sectors, 16384 KiB)
-fs          ext2 on /mnt, 1024 B blocks, 14298/16384 blocks free, 4042/4096 inodes free
+fs          ext2 on /mnt, 1024 B blocks, 14254/16384 blocks free, 4038/4096 inodes free
 virtio-net: no device
 net         no network device
 
@@ -162,4 +166,18 @@ printf_bounds: %.*x/negative precision ok
 printf_bounds: width/precision bounds ok (no per-byte stack write)
 printf_bounds: ok (12 checks)
 run: /mnt/printf_bounds exited with code 0
+pagh:rv64> run /mnt/calloc_overflow_victim /mnt/rec_ok.bin
+COUNT 4
+ALLOCATED, count*sizeof = 64 mod 2^64
+FILLED OK
+run: /mnt/calloc_overflow_victim exited with code 0
+pagh:rv64> run /mnt/calloc_overflow_victim /mnt/rec_overflow.bin
+COUNT 1152921504606846977
+CALLOC REFUSED
+run: /mnt/calloc_overflow_victim exited with code 3
+pagh:rv64> run /mnt/alloc_bounds
+alloc_bounds: calloc/malloc overflow refused
+alloc_bounds: realloc copies only the old block
+alloc_bounds: ok (4 checks)
+run: /mnt/alloc_bounds exited with code 0
 pagh:rv64> 
