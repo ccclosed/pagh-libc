@@ -46,8 +46,14 @@ file-backed executable code of the same object, the pointer tables themselves
 must be writable data, `SHN_ABS` relocation values must stay inside the
 defining object, and the program's entry point is validated before any
 constructor runs — on the `dlopen()` path too.
+**0.15.3** closes the round-3 runtime finding F-r3-rt-2: `calloc()` refuses a
+`n * size` product that overflows `size_t` (`NULL`/`ENOMEM`, and it zeroes only
+what it reserved), `malloc()` refuses a size whose 16-byte rounding would wrap
+instead of returning a successful zero-byte block, and every block now carries
+a 16-byte header with its requested size so `realloc()` copies the old contents
+rather than the new size from a pointer whose old size it never knew.
 
-Version **0.15.2** (`VERSION`, tag `v0.15.2`).
+Version **0.15.3** (`VERSION`, tag `v0.15.3`).
 
 ## Branching and releases
 
@@ -122,7 +128,7 @@ below).
 |---|---|
 | start/exit | `_start`, `exit`/`_exit` (whole process via `exit_group(94)`, POSIX semantics), `atexit` (LIFO), `abort` |
 | syscalls | every number in the kernel's ABI table (`docs/abi.md` §2 in pagh-riscv) has a wrapper: `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit exit_group sched_yield getpid poll ppoll dup dup2 pipe2 sigaltstack set_tid_address`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
-| memory | `malloc/calloc/realloc/free` (bump `brk`, `free` no-op), `memcpy/memset/memmove/memcmp` |
+| memory | `malloc/calloc/realloc/free` (bump `brk`, 16-byte size header, `free` no-op), `memcpy/memset/memmove/memcmp` |
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strtok_r`/`strsep` (+ `strspn`/`strcspn`), `strerror`; `perror` in stdio |
 | stdlib | `malloc/calloc/realloc/free`, `qsort`, `bsearch`, `atoi/atol/abs`, `atexit`/`exit`/`abort` |
 | cli | `include/getopt.h`: `getopt`, `getopt_long`, `getopt_long_only`, `struct option`, `no_argument`/`required_argument`/`optional_argument`, the `optarg`/`optind`/`opterr`/`optopt` globals; argv permutation, `+`/`-`/`:` prefixes, `--` terminator and long-option abbreviations behave like the host libc's |
@@ -147,12 +153,15 @@ rejects `STT_TLS` relocations — a different thing from the TLS networking
 protocol discussed below), no locale, no wide characters, no `putenv`, and no
 kernel `chdir` (libc keeps a process-local cwd and rewrites relative paths).
 `malloc` is a bump allocator: `free` is a no-op, there is no per-thread heap and
-no locking, and `realloc` copies `size` bytes without knowing the old size.
-`FILE` has no locking. `pthread_join` only works for threads created through
-this libc (a 16-slot registry). `getline` grows its buffer by allocating a
-larger one and copying, because `realloc` cannot learn the old size; the old
-buffer is not reclaimed (`free` is a no-op), so a line that outgrows the
-initial 120 bytes costs one dead allocation per doubling until exit.
+no locking. Each block carries a 16-byte header holding its requested size, so
+`realloc` copies exactly the old contents and never reads past the old block;
+sizes are checked against `size_t` overflow (`calloc`'s product and `malloc`'s
+16-byte rounding fail with `NULL`/`ENOMEM` instead of returning an undersized
+block). `FILE` has no locking. `pthread_join` only works for threads created
+through this libc (a 16-slot registry). `getline` grows its buffer by
+allocating a larger one and copying; the old buffer is not reclaimed (`free` is
+a no-op), so a line that outgrows the initial 120 bytes costs one dead
+allocation per doubling until exit.
 
 **Time is uptime.** `clock_gettime(0)` and `(1)` both return the kernel's
 millisecond uptime (`pagh-riscv` returns the same counter for both), and the
@@ -660,13 +669,60 @@ the normal `hello_dyn`/`dlopen` run still reaches
 produce `instruction page fault (stval=0x4141414141414140)` and
 `store page fault (sepc=0x30000184)`, the audit's two control-flow diverts.
 
+## Security hardening (0.15.3)
+
+**F-r3-rt-2 — `calloc()` did not check `n * size`.** The round-3 runtime audit
+(`Pagh-OS/attack/r3/runtime`) found that `src/malloc.c` computed
+`size_t total = n * size` and passed it to `malloc` with no overflow check.
+POSIX requires `calloc` to fail when the product does not fit; this one wrapped,
+so the caller's contract ("you own `n * size` zeroed bytes") was violated
+silently. The audit's victim is an ordinary parser shape: read an untrusted
+8-byte record count from a file, `calloc(count, sizeof(struct rec))`, fill the
+records. With `count = 0x1000000000000001` and 16-byte records the product
+wraps to 16, `calloc` returns a 16-byte block, and the fill loop writes 16-byte
+records until it runs off the heap:
+
+```text
+COUNT 1152921504606846977
+ALLOCATED, count*sizeof = 16 mod 2^64
+[user] ... killed: store page fault (cause=15, stval=0x20011000, sepc=0x100ca)
+```
+
+`stval=0x20011000` is ~68 KiB above the pagh heap base (`0x20000000`): a heap
+overflow write through every allocation of the process.
+
+Now:
+
+- `calloc` rejects `n && size > SIZE_MAX / n` with `NULL` and `ENOMEM` **before**
+  allocating or zeroing anything, and zeroes exactly the reserved total;
+- `malloc` rejects a size whose 16-byte rounding or block-header addition would
+  wrap (`size > SIZE_MAX - 15`), instead of handing back a "successful"
+  pointer to a zero-byte block (the audit's code-evident sibling C2);
+- every block starts with a 16-byte header holding the requested size, so
+  `realloc(ptr, larger)` copies exactly the old contents instead of
+  `memmove`-ing the *new* size from a pointer whose old size it never knew (the
+  audit's code-evident OOB-read sibling C1). Shrinking keeps the block — `free`
+  is a no-op, so the reservation cannot be returned anyway.
+
+Evidence: `tests/malloc_test.c` (run by `tools/host-tests.sh`, plain and under
+AddressSanitizer, over the fake brk in `tests/host_brk_shim.c`) drives the
+overflow products, the `SIZE_MAX` rounding, block alignment, the count=4
+control and a realloc-neighbour canary. The same test fails on the pre-fix
+`src/malloc.c` (`calloc(0x1000000000000001, 16)` is non-NULL and the realloc
+copy walks into the neighbour). Live, `tests/security/calloc_overflow_victim.c`
+is the audit victim itself (count=4 control exits 0 with `FILLED OK`; the
+untrusted count prints `CALLOC REFUSED` and exits 3 with no write) and
+`tests/security/alloc_bounds.c` checks the two siblings and alignment on the
+guest; `tools/live-security.py` requires those markers in
+[`docs/live-security.txt`](docs/live-security.txt).
+
 ## Live evidence
 
 [`docs/live-security.txt`](docs/live-security.txt) is the committed transcript
 of one `tools/live-security.py` run: the ext2 image carries `ld-pagh`, the
-shared objects and the objects generated by `tests/security/make_evil_elf.py`
-and `tests/security/make_init_evil.py`; the harness drives eleven guest
-programs (it needs several commands, so it types
+shared objects and the objects generated by `tests/security/make_evil_elf.py`,
+`tests/security/make_init_evil.py` and the two allocator guests; the harness
+drives fourteen guest programs (it needs several commands, so it types
 them into the kernel's serial console one prompt at a time instead of using
 `run.py --keys`). It shows the full dlopen regression still passing
 (`run: /mnt/ld-pagh exited with code 0`), the two `__pagh_dl_state`-hostile
@@ -675,9 +731,12 @@ would have killed the loader before their entry stub), four malformed
 `PT_DYNAMIC` objects refused with `ld-pagh: malformed ELF: …` and exit status
 1, the three constructor/fini PoCs refused with
 `ld-pagh: malformed ELF: unsafe DT_INIT_ARRAY` /
-`SHN_ABS symbol outside the image` and exit status 1, and `printf_bounds: ok`
-after the precision sweep. The header records the kernel/libc revisions and
-SHA-256, so the run can be reproduced or falsified.
+`SHN_ABS symbol outside the image` and exit status 1, `printf_bounds: ok`
+after the precision sweep, the count=4 `FILLED OK` control and
+`CALLOC REFUSED`/exit 3 for the untrusted record count (no fault), and
+`alloc_bounds: ok (4 checks)` for the malloc/realloc siblings. The header
+records the kernel/libc revisions and SHA-256, so the run can be reproduced or
+falsified.
 
 [`docs/live-scan.txt`](docs/live-scan.txt) is the committed transcript of one
 `tools/live-scan.py` run: the guest writes a record file on the ext2 image,

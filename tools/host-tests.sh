@@ -48,6 +48,31 @@ $CC -fsanitize=address build/host_printf_safety_test.o \
     build/host_stdio_asan.o build/host_float_asan.o -o build/host_printf_safety_test
 ./build/host_printf_safety_test
 
+echo "== allocator bounds (calloc product overflow, malloc rounding, realloc header) =="
+# F-r3-rt-2: src/malloc.c over a fake brk (tests/host_brk_shim.c).  The
+# library's malloc family is renamed so the test keeps the host's allocator;
+# the fake break makes wrapping products and rounding wrap return ENOMEM
+# instead of a pointer into the test's own memory.  Both the plain build and
+# an AddressSanitizer build run, so a write past the arena or a bad header
+# access fails the gate.
+$CC -O2 -Iinclude -Dmalloc=pagh_malloc -Dcalloc=pagh_calloc \
+    -Drealloc=pagh_realloc -Dfree=pagh_free \
+    -c src/malloc.c -o build/host_malloc.o
+$CC -O2 -c tests/host_brk_shim.c -o build/host_brk_shim.o
+$CC -O2 tests/malloc_test.c build/host_malloc.o build/host_brk_shim.o \
+    -o build/host_malloc_test
+./build/host_malloc_test
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
+    -Dmalloc=pagh_malloc -Dcalloc=pagh_calloc \
+    -Drealloc=pagh_realloc -Dfree=pagh_free \
+    -c src/malloc.c -o build/host_malloc_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer \
+    -c tests/host_brk_shim.c -o build/host_brk_shim_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer \
+    tests/malloc_test.c build/host_malloc_asan.o build/host_brk_shim_asan.o \
+    -o build/host_malloc_test_asan
+./build/host_malloc_test_asan
+
 echo "== DNS message test (build/parse, compression, negative cases) =="
 $CC -O2 -Iinclude tests/dns_test.c src/dns.c -o build/host_dns_test
 ./build/host_dns_test

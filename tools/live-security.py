@@ -28,6 +28,14 @@ on the pagh-riscv guest, against a real kernel and the real `ld-pagh`/
   objects; the fixed loader must refuse each with
   `malformed ELF: unsafe DT_INIT_ARRAY` / `SHN_ABS symbol outside the image`
   and exit 1 instead of faulting.
+* **F-r3-rt-2** — `calloc(n, size)` multiplied without an overflow check, so
+  a parser that read an untrusted record count got an undersized block and
+  wrote past it (the audit's store page fault ~68 KiB into the heap).
+  `tests/security/calloc_overflow_victim.c` is the audit victim; the fixed
+  library must answer the untrusted count with `CALLOC REFUSED`/exit 3 and
+  still serve the count=4 control.  `tests/security/alloc_bounds.c` covers
+  the code-evident siblings (`malloc` rounding wrap, `realloc` copying the
+  new size from an unknown old one).
 
 The harness boots the pagh-riscv kernel with the same QEMU configuration as
 the kernel's own ``tools/run.py`` (the kernel repository is never modified),
@@ -154,6 +162,32 @@ COMMANDS = (
             "run: /mnt/printf_bounds exited with code 0",
         ),
     ),
+    (
+        "run /mnt/calloc_overflow_victim /mnt/rec_ok.bin",
+        (
+            "COUNT 4",
+            "ALLOCATED, count*sizeof = 64 mod 2^64",
+            "FILLED OK",
+            "run: /mnt/calloc_overflow_victim exited with code 0",
+        ),
+    ),
+    (
+        "run /mnt/calloc_overflow_victim /mnt/rec_overflow.bin",
+        (
+            "COUNT 1152921504606846977",
+            "CALLOC REFUSED",
+            "run: /mnt/calloc_overflow_victim exited with code 3",
+        ),
+    ),
+    (
+        "run /mnt/alloc_bounds",
+        (
+            "alloc_bounds: calloc/malloc overflow refused",
+            "alloc_bounds: realloc copies only the old block",
+            "alloc_bounds: ok (4 checks)",
+            "run: /mnt/alloc_bounds exited with code 0",
+        ),
+    ),
 )
 
 # Strings that must never appear: they mean a guest task was killed by a fault
@@ -221,16 +255,21 @@ def qemu_version() -> str:
         return "unknown"
 
 
-def cross_nm() -> str | None:
+def cross_tool(name: str) -> str | None:
+    """Resolve a cross tool from $CROSS (a prefix, as build.sh uses) or PATH."""
     cross = os.environ.get("CROSS", CROSS_DEFAULT)
-    candidates = [cross + "nm", os.path.join(cross, "riscv-none-elf-nm")]
-    found = shutil.which("riscv-none-elf-nm")
+    candidates = [cross + name, os.path.join(cross, "riscv-none-elf-" + name)]
+    found = shutil.which("riscv-none-elf-" + name)
     if found:
         candidates.append(found)
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
     return None
+
+
+def cross_nm() -> str | None:
+    return cross_tool("nm")
 
 
 def dl_state_address() -> int | None:
@@ -365,15 +404,26 @@ def main() -> int:
         default=os.environ.get("PAGH_RISCV", str(ROOT.parent / "pagh-riscv")),
         help="pagh-riscv checkout (default ../pagh-riscv or $PAGH_RISCV)",
     )
+    parser.add_argument(
+        "--kernel",
+        default=None,
+        help="exact kernel ELF to boot instead of the build under --pagh-riscv "
+             "(pins the image when another job may rebuild that checkout)",
+    )
     parser.add_argument("--keep-workdir", action="store_true")
     args = parser.parse_args()
 
     kernel_repo = pathlib.Path(args.pagh_riscv).resolve()
-    kernel = kernel_repo / KERNEL_RELEASE
-    if not kernel.is_file():
-        kernel = kernel_repo / KERNEL_DEBUG
-    if not kernel.is_file():
-        die(f"no built kernel under {kernel_repo} (run `cargo build --release` there)")
+    if args.kernel:
+        kernel = pathlib.Path(args.kernel).resolve()
+        if not kernel.is_file():
+            die(f"--kernel {kernel} is not a file")
+    else:
+        kernel = kernel_repo / KERNEL_RELEASE
+        if not kernel.is_file():
+            kernel = kernel_repo / KERNEL_DEBUG
+        if not kernel.is_file():
+            die(f"no built kernel under {kernel_repo} (run `cargo build --release` there)")
     if shutil.which("qemu-system-riscv64") is None:
         die("qemu-system-riscv64 is required")
     if shutil.which("mke2fs") is None:
@@ -400,6 +450,46 @@ def main() -> int:
             shutil.copy(shared, diskroot / shared.name)
         if not (diskroot / "ld-pagh").is_file():
             die("build.sh did not produce build/ld-pagh.elf")
+
+        # F-r3-rt-2: the audit's calloc victim plus the malloc/realloc sibling
+        # checks are guest programs, compiled here against the library build
+        # (the attack directory is not part of this repository).
+        cc = cross_tool("gcc")
+        if cc is None:
+            die("riscv-none-elf-gcc is required for the allocator guests")
+        guest_sources = (
+            ("calloc_overflow_victim",
+             "tests/security/calloc_overflow_victim.c"),
+            ("alloc_bounds", "tests/security/alloc_bounds.c"),
+        )
+        for name, source in guest_sources:
+            guest_build = subprocess.run(
+                [
+                    cc, "-march=rv64gc", "-mabi=lp64d",
+                    "-mcmodel=medany", "-ffreestanding",
+                    "-fno-stack-protector", "-fno-builtin", "-nostdlib",
+                    "-O2", "-Wall", "-Wextra",
+                    "-I", str(ROOT / "include"),
+                    "-T", str(ROOT / "link.ld"),
+                    str(ROOT / source), str(ROOT / "build" / "libpagh-c.a"),
+                    "-lgcc", "-o", str(diskroot / name),
+                ],
+                capture_output=True, text=True,
+            )
+            if guest_build.returncode != 0:
+                print(guest_build.stdout, file=sys.stderr)
+                print(guest_build.stderr, file=sys.stderr)
+                die(f"could not build {source}")
+        # count = 4 (control) and the audit's untrusted same-heap-overflow
+        # count, little endian, as the victim reads them.
+        (diskroot / "rec_ok.bin").write_bytes((4).to_bytes(8, "little"))
+        (diskroot / "rec_overflow.bin").write_bytes(
+            (0x1000000000000001).to_bytes(8, "little")
+        )
+        print(
+            "live-security: built calloc_overflow_victim and alloc_bounds",
+            file=sys.stderr,
+        )
 
         # The audit's crafted objects, generated at test time (the attack
         # directory is not part of this repository).
@@ -484,18 +574,21 @@ def main() -> int:
 
         header = "\n".join(
             [
-                "# Live security acceptance for pagh-libc (runtime audits F-rt-1/F-rt-2/F-rt-3, F-r2-libc-1)",
+                "# Live security acceptance for pagh-libc (runtime audits F-rt-1/F-rt-2/F-rt-3, F-r2-libc-1, F-r3-rt-2)",
                 "# F-rt-1: ld-pagh SHN_ABS __pagh_dl_state cannot become an arbitrary store",
                 "# F-rt-2: vsnprintf integer precision past the 32-byte digit buffer",
                 "# F-rt-3: PT_DYNAMIC p_vaddr/p_memsz validated against the image",
                 "# F-r2-libc-1: DT_INIT/DT_INIT_ARRAY/FINI targets validated; SHN_ABS relocation bounded",
-                f"# kernel: {kernel}",
+                "# F-r3-rt-2: calloc n*size overflow refused (NULL/ENOMEM); malloc rounding and realloc old-size copied",
+                f"# kernel: {kernel}"
+                + (" (pinned with --kernel)" if args.kernel else ""),
                 f"# kernel checkout: {kernel_repo} (revision {git_revision(kernel_repo)}, crate {crate_version(kernel_repo)})",
                 f"# kernel sha256: {kernel_sha}",
                 f"# pagh-libc: {libc_version()} (VERSION), revision {git_revision(ROOT)}",
                 f"# host: {qemu_version()}",
                 "# image: mke2fs -t ext2 -b 1024 -d <root with build/*.elf, build/*.so, "
-                "tests/security/make_evil_elf.py and make_init_evil.py objects> disk.img",
+                "tests/security/make_evil_elf.py and make_init_evil.py objects, "
+                "calloc_overflow_victim/alloc_bounds, rec_ok.bin/rec_overflow.bin> disk.img",
                 "# guest commands:",
                 "\n".join(f"#   {command}" for command, _ in COMMANDS),
                 "",
