@@ -6,6 +6,8 @@
 # hand-built DNS and HTTP messages, plus a synthetic-stream test for
 # getline/getdelim, a synthetic-brk allocator test (calloc product overflow,
 # malloc rounding, header-tracked realloc, also under AddressSanitizer), a
+# pthread stack-size/attribute validation test (wrap/SIZE_MAX/zero/min-max over
+# a tracking allocator and real host threads, also under AddressSanitizer), a
 # synthetic-object test for ld-pagh's constructor call-target validation, and
 # a table check that every errno the header defines has a strerror() text.
 #
@@ -140,6 +142,51 @@ $CC -O2 -c tests/host_errno_shim.c -o build/host_errno_shim.o
 $CC -O2 tests/time_test.c build/host_time.o build/host_errno_shim.o \
     -o build/host_time_test
 ./build/host_time_test
+
+echo "== pthread stack-size validation (F-r4-rt-1: wrap, 0, SIZE_MAX, min/max) =="
+# src/pthread.c over the tracking allocator and the real-host-thread clone()
+# emulation in tests/host_pthread_shim.c.  Every pthread_* entry point is
+# renamed so the test binary keeps glibc's own pthread implementation, and the
+# allocator is renamed so the shim can assert that clone() received the end of
+# a real PTHREAD_STACK_MIN-or-larger block (a zero-byte stack ends a 16-byte
+# block, or no block at all).  Plain and AddressSanitizer builds.
+PTHREAD_RENAMES="-Dpthread_create=pagh_pthread_create -Dpthread_join=pagh_pthread_join \
+    -Dpthread_exit=pagh_pthread_exit -Dpthread_self=pagh_pthread_self \
+    -Dpthread_attr_init=pagh_pthread_attr_init \
+    -Dpthread_attr_setstacksize=pagh_pthread_attr_setstacksize \
+    -Dpthread_attr_destroy=pagh_pthread_attr_destroy \
+    -Dpthread_mutex_init=pagh_pthread_mutex_init \
+    -Dpthread_mutex_destroy=pagh_pthread_mutex_destroy \
+    -Dpthread_mutex_lock=pagh_pthread_mutex_lock \
+    -Dpthread_mutex_unlock=pagh_pthread_mutex_unlock \
+    -Dpthread_mutex_trylock=pagh_pthread_mutex_trylock \
+    -Dpthread_cond_init=pagh_pthread_cond_init \
+    -Dpthread_cond_destroy=pagh_pthread_cond_destroy \
+    -Dpthread_cond_wait=pagh_pthread_cond_wait \
+    -Dpthread_cond_signal=pagh_pthread_cond_signal \
+    -Dpthread_cond_broadcast=pagh_pthread_cond_broadcast \
+    -Dpthread_rwlock_init=pagh_pthread_rwlock_init \
+    -Dpthread_rwlock_rdlock=pagh_pthread_rwlock_rdlock \
+    -Dpthread_rwlock_wrlock=pagh_pthread_rwlock_wrlock \
+    -Dpthread_rwlock_unlock=pagh_pthread_rwlock_unlock"
+PTHREAD_ALLOC_RENAMES="-Dmalloc=pagh_thread_malloc -Dfree=pagh_thread_free"
+$CC -O2 -Iinclude $PTHREAD_RENAMES $PTHREAD_ALLOC_RENAMES \
+    -c src/pthread.c -o build/host_pthread.o
+$CC -O2 -c tests/host_pthread_shim.c -o build/host_pthread_shim.o
+$CC -O2 -pthread -Iinclude $PTHREAD_RENAMES tests/pthread_test.c \
+    build/host_pthread.o build/host_pthread_shim.o build/host_errno_shim.o \
+    -o build/host_pthread_test
+./build/host_pthread_test
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
+    $PTHREAD_RENAMES $PTHREAD_ALLOC_RENAMES \
+    -c src/pthread.c -o build/host_pthread_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer \
+    -c tests/host_pthread_shim.c -o build/host_pthread_shim_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -pthread \
+    -Iinclude $PTHREAD_RENAMES tests/pthread_test.c \
+    build/host_pthread_asan.o build/host_pthread_shim_asan.o \
+    build/host_errno_shim.o -o build/host_pthread_test_asan
+./build/host_pthread_test_asan
 
 echo "== ld-pagh call-target validation (DT_INIT/DT_INIT_ARRAY/FINI, SHN_ABS) =="
 # src/dynload.c is compiled into the test translation unit so the static

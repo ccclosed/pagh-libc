@@ -36,6 +36,16 @@ on the pagh-riscv guest, against a real kernel and the real `ld-pagh`/
   still serve the count=4 control.  `tests/security/alloc_bounds.c` covers
   the code-evident siblings (`malloc` rounding wrap, `realloc` copying the
   new size from an unknown old one).
+* **F-r4-rt-1** — `pthread_create()` rounded a caller-supplied stack size with
+  an unchecked add, so `(size_t)-1` wrapped to a zero-byte stack, `malloc(0)`
+  succeeded, and the thread's sp pointed into live heap blocks: the audit's
+  `pthread_stack_wrap.c` died on a store page fault below the heap and
+  `pthread_stack_evil.c` turned an untrusted request file into heap metadata
+  that `realloc` then trusted.  The fixed library refuses such an attribute
+  (`PTHREAD STACK REFUSED`, exit 2) with no clone, no heap write and intact
+  canaries; `tests/security/pthread_stack_bounds.c` pins the min/max/zero/
+  direct-struct cases and `examples/threads.c` proves a normal thread still
+  runs (`counter=8 ret=50/30`).
 
 The harness boots the pagh-riscv kernel with the same QEMU configuration as
 the kernel's own ``tools/run.py`` (the kernel repository is never modified),
@@ -186,6 +196,42 @@ COMMANDS = (
             "alloc_bounds: realloc copies only the old block",
             "alloc_bounds: ok (4 checks)",
             "run: /mnt/alloc_bounds exited with code 0",
+        ),
+    ),
+    (
+        "run /mnt/threads",
+        (
+            "counter=8 ret=50/30",
+            "run: /mnt/threads exited with code 0",
+        ),
+    ),
+    (
+        # F-r4-rt-1, audit victim 1: the only bad input is the stack size.
+        "run /mnt/pthread_stack_wrap",
+        (
+            "REQUESTED STACK SIZE 18446744073709551615",
+            "PTHREAD CREATE rc=-1",
+            "PTHREAD STACK REFUSED",
+            "run: /mnt/pthread_stack_wrap exited with code 2",
+        ),
+    ),
+    (
+        # F-r4-rt-1, audit victim 3: an untrusted request file must never
+        # become heap metadata, because the worker never gets a heap stack.
+        "run /mnt/pthread_stack_evil /mnt/request.bin",
+        (
+            "REQUESTED STACK SIZE 18446744073709551615",
+            "PTHREAD CREATE rc=-1",
+            "PTHREAD STACK REFUSED",
+            "run: /mnt/pthread_stack_evil exited with code 2",
+        ),
+    ),
+    (
+        # F-r4-rt-1: min/max/zero/direct-struct cases plus the control thread.
+        "run /mnt/pthread_stack_bounds",
+        (
+            "pthread_stack_bounds: ok (",
+            "run: /mnt/pthread_stack_bounds exited with code 0",
         ),
     ),
 )
@@ -461,6 +507,11 @@ def main() -> int:
             ("calloc_overflow_victim",
              "tests/security/calloc_overflow_victim.c"),
             ("alloc_bounds", "tests/security/alloc_bounds.c"),
+            # F-r4-rt-1: the audit's pthread victims (verbatim) and this
+            # repository's min/max/direct-struct checks.
+            ("pthread_stack_wrap", "tests/security/pthread_stack_wrap.c"),
+            ("pthread_stack_evil", "tests/security/pthread_stack_evil.c"),
+            ("pthread_stack_bounds", "tests/security/pthread_stack_bounds.c"),
         )
         for name, source in guest_sources:
             guest_build = subprocess.run(
@@ -486,8 +537,12 @@ def main() -> int:
         (diskroot / "rec_overflow.bin").write_bytes(
             (0x1000000000000001).to_bytes(8, "little")
         )
+        # F-r4-rt-1: the untrusted request the evil worker reads into its
+        # thread stack (768 bytes of 0x41; the file is exactly its buffer).
+        (diskroot / "request.bin").write_bytes(b"A" * 768)
         print(
-            "live-security: built calloc_overflow_victim and alloc_bounds",
+            "live-security: built calloc_overflow_victim, alloc_bounds and "
+            "the pthread stack guests",
             file=sys.stderr,
         )
 
@@ -574,12 +629,13 @@ def main() -> int:
 
         header = "\n".join(
             [
-                "# Live security acceptance for pagh-libc (runtime audits F-rt-1/F-rt-2/F-rt-3, F-r2-libc-1, F-r3-rt-2)",
+                "# Live security acceptance for pagh-libc (runtime audits F-rt-1/F-rt-2/F-rt-3, F-r2-libc-1, F-r3-rt-2, F-r4-rt-1)",
                 "# F-rt-1: ld-pagh SHN_ABS __pagh_dl_state cannot become an arbitrary store",
                 "# F-rt-2: vsnprintf integer precision past the 32-byte digit buffer",
                 "# F-rt-3: PT_DYNAMIC p_vaddr/p_memsz validated against the image",
                 "# F-r2-libc-1: DT_INIT/DT_INIT_ARRAY/FINI targets validated; SHN_ABS relocation bounded",
                 "# F-r3-rt-2: calloc n*size overflow refused (NULL/ENOMEM); malloc rounding and realloc old-size copied",
+                "# F-r4-rt-1: pthread stack size validated and rounded checked; SIZE_MAX/0 attrs refused",
                 f"# kernel: {kernel}"
                 + (" (pinned with --kernel)" if args.kernel else ""),
                 f"# kernel checkout: {kernel_repo} (revision {git_revision(kernel_repo)}, crate {crate_version(kernel_repo)})",
@@ -588,7 +644,8 @@ def main() -> int:
                 f"# host: {qemu_version()}",
                 "# image: mke2fs -t ext2 -b 1024 -d <root with build/*.elf, build/*.so, "
                 "tests/security/make_evil_elf.py and make_init_evil.py objects, "
-                "calloc_overflow_victim/alloc_bounds, rec_ok.bin/rec_overflow.bin> disk.img",
+                "calloc_overflow_victim/alloc_bounds/pthread_stack_* guests, "
+                "rec_ok.bin/rec_overflow.bin/request.bin> disk.img",
                 "# guest commands:",
                 "\n".join(f"#   {command}" for command, _ in COMMANDS),
                 "",
