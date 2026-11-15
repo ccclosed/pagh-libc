@@ -46,8 +46,22 @@ file-backed executable code of the same object, the pointer tables themselves
 must be writable data, `SHN_ABS` relocation values must stay inside the
 defining object, and the program's entry point is validated before any
 constructor runs — on the `dlopen()` path too.
+**0.15.3** closes the round-3 runtime finding F-r3-rt-2: `calloc()` refuses a
+`n * size` product that overflows `size_t` (`NULL`/`ENOMEM`, and it zeroes only
+what it reserved), `malloc()` refuses a size whose 16-byte rounding would wrap
+instead of returning a successful zero-byte block, and every block now carries
+a 16-byte header with its requested size so `realloc()` copies the old contents
+rather than the new size from a pointer whose old size it never knew.
+**0.15.3** also closes the round-4 runtime finding F-r4-rt-1:
+`pthread_create()` validates a requested stack size against `PTHREAD_STACK_MIN`
+(16 KiB) and `PTHREAD_STACK_MAX` (1 MiB, the ABI's `brk` heap window), rounds it
+with an explicit overflow check, and refuses a zero or wrapping (`SIZE_MAX`)
+attribute with `EINVAL` before allocating anything or calling `clone()`.
+`pthread_attr_setstacksize()` performs the same validation and keeps the rejected
+size in the attribute, so a caller that ignores its error cannot make create()
+silently substitute the default stack.
 
-Version **0.15.2** (`VERSION`, tag `v0.15.2`).
+Version **0.15.3** (`VERSION`, tag `v0.15.3`).
 
 ## Branching and releases
 
@@ -122,7 +136,7 @@ below).
 |---|---|
 | start/exit | `_start`, `exit`/`_exit` (whole process via `exit_group(94)`, POSIX semantics), `atexit` (LIFO), `abort` |
 | syscalls | every number in the kernel's ABI table (`docs/abi.md` §2 in pagh-riscv) has a wrapper: `read write open close lseek fstat getdents64 brk clock_gettime nanosleep uname readlinkat mkdirat unlinkat symlinkat linkat renameat2 fchmodat ftruncate mmap mprotect exit exit_group sched_yield getpid poll ppoll dup dup2 pipe2 sigaltstack set_tid_address`, and the socket family `socket bind listen accept connect sendto recvfrom setsockopt getsockopt shutdown` (kernel ≥ 0.17.0 for UDP, ≥ 0.18.0 for listen/accept) |
-| memory | `malloc/calloc/realloc/free` (bump `brk`, `free` no-op), `memcpy/memset/memmove/memcmp` |
+| memory | `malloc/calloc/realloc/free` (bump `brk`, 16-byte size header, `free` no-op), `memcpy/memset/memmove/memcmp` |
 | strings | `strlen/strcmp/strncmp/strcpy/strncpy/strcat/strchr/strrchr/strstr/strdup`, `strtok_r`/`strsep` (+ `strspn`/`strcspn`), `strerror`; `perror` in stdio |
 | stdlib | `malloc/calloc/realloc/free`, `qsort`, `bsearch`, `atoi/atol/abs`, `atexit`/`exit`/`abort` |
 | cli | `include/getopt.h`: `getopt`, `getopt_long`, `getopt_long_only`, `struct option`, `no_argument`/`required_argument`/`optional_argument`, the `optarg`/`optind`/`opterr`/`optopt` globals; argv permutation, `+`/`-`/`:` prefixes, `--` terminator and long-option abbreviations behave like the host libc's |
@@ -135,7 +149,7 @@ below).
 | env | `getenv/setenv/unsetenv` (mutable layer over the kernel frame) |
 | process | `getpid/getppid`, `fork`, `execv/execve`, `waitpid`, `sched_yield`, `sleep/usleep`, `exit` |
 | time | `include/time.h`: `clock_gettime`, `time` (the ABI's uptime clock — seconds since boot, not wall time), `nanosleep`/`sleep`/`usleep`; `gettimeofday` in `<sys/time.h>`; `struct tm`, `gmtime_r`/`localtime_r`/`gmtime`/`localtime` (UTC; `localtime_r` applies a fixed `TZ` offset, no tzdata/DST) and `strftime` (C/POSIX basic conversions, C-locale names, truncation returns 0) |
-| threads | `pthread_create/join/exit/self`, `pthread_attr_*`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds, 64 KiB stack); `pthread_exit` ends only the calling thread (93), while `exit`/`_exit`/`abort` end the process (94) |
+| threads | `pthread_create/join/exit/self`, `pthread_attr_*` with `PTHREAD_STACK_MIN`/`PTHREAD_STACK_MAX`, futex-backed `pthread_mutex_*`, `pthread_cond_*`, `pthread_rwlock_*` over clone/futex (shared address space/heap/fds; 64 KiB default stack, explicit sizes validated to [16 KiB, 1 MiB] and refused with `EINVAL`/`ENOMEM` when out of range or not backed by the heap); `pthread_exit` ends only the calling thread (93), while `exit`/`_exit`/`abort` end the process (94) |
 | signals | `signal/sigaction/raise/kill/sigprocmask` with the kernel restorer; handlers run on the native signal frame |
 | cwd | `chdir/getcwd` process-local (the ABI has no chdir); relative `open/stat/...` resolve against it |
 | dynamic | `ld-pagh` maps ET_DYN executables and their `DT_NEEDED` tree (recursively, up to 16 objects); `dlopen/dlsym/dlclose/dlerror` add, scope and resolve objects at runtime (`RTLD_GLOBAL`/`RTLD_LOCAL`, `RTLD_DEFAULT`/`RTLD_NEXT`); `DT_INIT`/`DT_INIT_ARRAY` run |
@@ -147,12 +161,22 @@ rejects `STT_TLS` relocations — a different thing from the TLS networking
 protocol discussed below), no locale, no wide characters, no `putenv`, and no
 kernel `chdir` (libc keeps a process-local cwd and rewrites relative paths).
 `malloc` is a bump allocator: `free` is a no-op, there is no per-thread heap and
-no locking, and `realloc` copies `size` bytes without knowing the old size.
-`FILE` has no locking. `pthread_join` only works for threads created through
-this libc (a 16-slot registry). `getline` grows its buffer by allocating a
-larger one and copying, because `realloc` cannot learn the old size; the old
-buffer is not reclaimed (`free` is a no-op), so a line that outgrows the
-initial 120 bytes costs one dead allocation per doubling until exit.
+no locking. Each block carries a 16-byte header holding its requested size, so
+`realloc` copies exactly the old contents and never reads past the old block;
+sizes are checked against `size_t` overflow (`calloc`'s product and `malloc`'s
+16-byte rounding fail with `NULL`/`ENOMEM` instead of returning an undersized
+block). `FILE` has no locking. `pthread_join` only works for threads created
+through this libc (a 16-slot registry). `pthread_create` carves the thread stack
+out of that same bump heap (no `mmap`, no guard page): a *valid* stack that a
+thread body overruns still corrupts the heap, which is stated here rather than
+papered over. What is bounded is the size itself — a zero, wrapping (`SIZE_MAX`)
+or out-of-window request is refused with `EINVAL` before anything is allocated
+(F-r4-rt-1). `pthread_attr_setstacksize` returns `EINVAL` for an invalid size but
+records it in the attribute, so dropping that error cannot silently create a
+default-size thread; call `pthread_attr_init` again to recover. `getline` grows its buffer by
+allocating a larger one and copying; the old buffer is not reclaimed (`free` is
+a no-op), so a line that outgrows the initial 120 bytes costs one dead
+allocation per doubling until exit.
 
 **Time is uptime.** `clock_gettime(0)` and `(1)` both return the kernel's
 millisecond uptime (`pagh-riscv` returns the same counter for both), and the
@@ -660,13 +684,110 @@ the normal `hello_dyn`/`dlopen` run still reaches
 produce `instruction page fault (stval=0x4141414141414140)` and
 `store page fault (sepc=0x30000184)`, the audit's two control-flow diverts.
 
+## Security hardening (0.15.3)
+
+**F-r3-rt-2 — `calloc()` did not check `n * size`.** The round-3 runtime audit
+(`Pagh-OS/attack/r3/runtime`) found that `src/malloc.c` computed
+`size_t total = n * size` and passed it to `malloc` with no overflow check.
+POSIX requires `calloc` to fail when the product does not fit; this one wrapped,
+so the caller's contract ("you own `n * size` zeroed bytes") was violated
+silently. The audit's victim is an ordinary parser shape: read an untrusted
+8-byte record count from a file, `calloc(count, sizeof(struct rec))`, fill the
+records. With `count = 0x1000000000000001` and 16-byte records the product
+wraps to 16, `calloc` returns a 16-byte block, and the fill loop writes 16-byte
+records until it runs off the heap:
+
+```text
+COUNT 1152921504606846977
+ALLOCATED, count*sizeof = 16 mod 2^64
+[user] ... killed: store page fault (cause=15, stval=0x20011000, sepc=0x100ca)
+```
+
+`stval=0x20011000` is ~68 KiB above the pagh heap base (`0x20000000`): a heap
+overflow write through every allocation of the process.
+
+Now:
+
+- `calloc` rejects `n && size > SIZE_MAX / n` with `NULL` and `ENOMEM` **before**
+  allocating or zeroing anything, and zeroes exactly the reserved total;
+- `malloc` rejects a size whose 16-byte rounding or block-header addition would
+  wrap (`size > SIZE_MAX - 15`), instead of handing back a "successful"
+  pointer to a zero-byte block (the audit's code-evident sibling C2);
+- every block starts with a 16-byte header holding the requested size, so
+  `realloc(ptr, larger)` copies exactly the old contents instead of
+  `memmove`-ing the *new* size from a pointer whose old size it never knew (the
+  audit's code-evident OOB-read sibling C1). Shrinking keeps the block — `free`
+  is a no-op, so the reservation cannot be returned anyway.
+
+Evidence: `tests/malloc_test.c` (run by `tools/host-tests.sh`, plain and under
+AddressSanitizer, over the fake brk in `tests/host_brk_shim.c`) drives the
+overflow products, the `SIZE_MAX` rounding, block alignment, the count=4
+control and a realloc-neighbour canary. The same test fails on the pre-fix
+`src/malloc.c` (`calloc(0x1000000000000001, 16)` is non-NULL and the realloc
+copy walks into the neighbour). Live, `tests/security/calloc_overflow_victim.c`
+is the audit victim itself (count=4 control exits 0 with `FILLED OK`; the
+untrusted count prints `CALLOC REFUSED` and exits 3 with no write) and
+`tests/security/alloc_bounds.c` checks the two siblings and alignment on the
+guest; `tools/live-security.py` requires those markers in
+[`docs/live-security.txt`](docs/live-security.txt).
+
+**F-r4-rt-1 — `pthread_create()` rounded the stack size unchecked.** The
+round-4 runtime audit (`Pagh-OS/attack/r4/runtime`) is the same integer-width
+class as F-r3-rt-2, in a second place: the victim takes the thread stack size
+from untrusted input, and `src/pthread.c` computed
+`stack_size = (stack_size + 4095) & ~4095` without checking the add. For
+`size_t stacksize = (size_t)-1` that is **0**, `malloc(0)` succeeds with a
+16-byte header block, and `clone()`'s only stack contract is "the page at
+`sp-16` is mapped user RW" — true for any heap address. The new thread's `sp`
+therefore pointed into live heap blocks: a 128-byte frame overwrote two live
+blocks and the allocator header of the second, and `realloc(victim2, 4096)`
+trusted the overwritten size and handed the 64-byte block back as 4096 bytes
+(`OVERFLOW WRITE DONE`). The audit's escalation is worse than a crash: an
+ordinary worker that copies a request into a 768-byte local buffer turned the
+bytes of an untrusted file into heap metadata, which `realloc` then trusted
+(`UNTRUSTED REQUEST BECAME HEAP METADATA`); with a 1 KiB frame the thread ran
+below the heap base and the process died on
+`store page fault (stval=0x1ffffca0)`.
+
+Now:
+
+- `<pthread.h>` defines `PTHREAD_STACK_MIN` (16 KiB, the POSIX/Linux floor) and
+  `PTHREAD_STACK_MAX` (1 MiB, the ABI's `brk` heap window). A requested size
+  outside that range, or one whose page rounding would wrap, is `EINVAL`;
+- `pthread_attr_setstacksize` validates the request, and `pthread_create`
+  revalidates the attribute — so a size written straight into the public
+  `pthread_attr_t` (the untrusted-config shape) is refused too — before any
+  allocation or `clone()`;
+- a zeroed (never initialized) attribute is refused instead of being treated
+  as "use the default"; only a `NULL` attribute selects the 64 KiB default;
+- the rounding is a checked add, so no `size_t` can become a zero-byte stack;
+- `pthread_attr_setstacksize` records a rejected size in the attribute and
+  still returns `EINVAL`; a caller that drops the error cannot make create()
+  silently substitute the default stack, and `pthread_attr_init` repairs the
+  attribute.
+
+Evidence: `tests/pthread_test.c` (run by `tools/host-tests.sh`, plain and under
+AddressSanitizer, over the tracking allocator and real-host-thread
+clone/futex/exit emulation in `tests/host_pthread_shim.c`) fails 41 of the 137
+checks that can run against the pre-fix `src/pthread.c` (the pre-fix create()
+would call a NULL start routine, so the two argument checks are excluded from
+that run) and passes on the fix. It also asserts the invariant the bug broke:
+`clone()` must receive the end of a tracked block of at least
+`PTHREAD_STACK_MIN` bytes. Live, the audit's own
+`tests/security/pthread_stack_wrap.c` and `pthread_stack_evil.c` now print
+`PTHREAD STACK REFUSED` and exit 2 (no clone, no heap write, canaries intact),
+`tests/security/pthread_stack_bounds.c` pins the min/max/zero/direct-struct
+window, checks the canaries of two live blocks after a refused create, and
+still runs normal threads (`pthread_stack_bounds: ok (54 checks)`), and
+`run /mnt/threads` still reports `counter=8 ret=50/30`.
+
 ## Live evidence
 
 [`docs/live-security.txt`](docs/live-security.txt) is the committed transcript
 of one `tools/live-security.py` run: the ext2 image carries `ld-pagh`, the
-shared objects and the objects generated by `tests/security/make_evil_elf.py`
-and `tests/security/make_init_evil.py`; the harness drives eleven guest
-programs (it needs several commands, so it types
+shared objects and the objects generated by `tests/security/make_evil_elf.py`,
+`tests/security/make_init_evil.py` and the allocator/pthread guests; the
+harness drives eighteen guest programs (it needs several commands, so it types
 them into the kernel's serial console one prompt at a time instead of using
 `run.py --keys`). It shows the full dlopen regression still passing
 (`run: /mnt/ld-pagh exited with code 0`), the two `__pagh_dl_state`-hostile
@@ -675,9 +796,17 @@ would have killed the loader before their entry stub), four malformed
 `PT_DYNAMIC` objects refused with `ld-pagh: malformed ELF: …` and exit status
 1, the three constructor/fini PoCs refused with
 `ld-pagh: malformed ELF: unsafe DT_INIT_ARRAY` /
-`SHN_ABS symbol outside the image` and exit status 1, and `printf_bounds: ok`
-after the precision sweep. The header records the kernel/libc revisions and
-SHA-256, so the run can be reproduced or falsified.
+`SHN_ABS symbol outside the image` and exit status 1, `printf_bounds: ok`
+after the precision sweep, the count=4 `FILLED OK` control and
+`CALLOC REFUSED`/exit 3 for the untrusted record count (no fault),
+`alloc_bounds: ok (4 checks)` for the malloc/realloc siblings, and
+`counter=8 ret=50/30` for the normal thread. The round-4 victims are refused
+without a fault — `PTHREAD STACK REFUSED`/exit 2 for both
+`pthread_stack_wrap` and `pthread_stack_evil` — and
+`pthread_stack_bounds: ok (54 checks)` covers the whole stack-size window,
+including canaries of two live heap blocks after a refused create. The header
+records the kernel/libc revisions and SHA-256, so the run can be reproduced or
+falsified.
 
 [`docs/live-scan.txt`](docs/live-scan.txt) is the committed transcript of one
 `tools/live-scan.py` run: the guest writes a record file on the ext2 image,
@@ -732,7 +861,7 @@ What it shows, per feature (exact lines from the transcript):
 
 ```sh
 ./build.sh                 # cross toolchain needed
-tools/host-tests.sh        # printf(+ASAN precision)/getopt/libc differential + DNS/HTTP/errno, host-only
+tools/host-tests.sh        # printf(+ASAN)/allocator+pthread validation(+ASAN)/getopt/libc differential + DNS/HTTP/errno, host-only
 PAGH_RISCV=../pagh-riscv python3 tools/live-sockets.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-getline.py
 PAGH_RISCV=../pagh-riscv python3 tools/live-timefmt.py

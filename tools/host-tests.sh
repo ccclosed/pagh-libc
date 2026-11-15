@@ -2,10 +2,14 @@
 # Host tests: run the pure library code on the build host, against the host's
 # libc (differential printf/sprintf, getopt family, bsearch/tokenizers/memchr,
 # time/strftime, sscanf/vsscanf/fscanf), under AddressSanitizer for the
-# integer width/precision bounds, and against hand-built DNS and HTTP
-# messages, plus a synthetic-stream test for getline/getdelim, a synthetic-
-# object test for ld-pagh's constructor call-target validation, and a table
-# check that every errno the header defines has a strerror() text.
+# integer width/precision bounds and the allocator bounds, and against
+# hand-built DNS and HTTP messages, plus a synthetic-stream test for
+# getline/getdelim, a synthetic-brk allocator test (calloc product overflow,
+# malloc rounding, header-tracked realloc, also under AddressSanitizer), a
+# pthread stack-size/attribute validation test (wrap/SIZE_MAX/zero/min-max over
+# a tracking allocator and real host threads, also under AddressSanitizer), a
+# synthetic-object test for ld-pagh's constructor call-target validation, and
+# a table check that every errno the header defines has a strerror() text.
 #
 #   ./tools/host-tests.sh
 #
@@ -47,6 +51,31 @@ $CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
 $CC -fsanitize=address build/host_printf_safety_test.o \
     build/host_stdio_asan.o build/host_float_asan.o -o build/host_printf_safety_test
 ./build/host_printf_safety_test
+
+echo "== allocator bounds (calloc product overflow, malloc rounding, realloc header) =="
+# F-r3-rt-2: src/malloc.c over a fake brk (tests/host_brk_shim.c).  The
+# library's malloc family is renamed so the test keeps the host's allocator;
+# the fake break makes wrapping products and rounding wrap return ENOMEM
+# instead of a pointer into the test's own memory.  Both the plain build and
+# an AddressSanitizer build run, so a write past the arena or a bad header
+# access fails the gate.
+$CC -O2 -Iinclude -Dmalloc=pagh_malloc -Dcalloc=pagh_calloc \
+    -Drealloc=pagh_realloc -Dfree=pagh_free \
+    -c src/malloc.c -o build/host_malloc.o
+$CC -O2 -c tests/host_brk_shim.c -o build/host_brk_shim.o
+$CC -O2 tests/malloc_test.c build/host_malloc.o build/host_brk_shim.o \
+    -o build/host_malloc_test
+./build/host_malloc_test
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
+    -Dmalloc=pagh_malloc -Dcalloc=pagh_calloc \
+    -Drealloc=pagh_realloc -Dfree=pagh_free \
+    -c src/malloc.c -o build/host_malloc_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer \
+    -c tests/host_brk_shim.c -o build/host_brk_shim_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer \
+    tests/malloc_test.c build/host_malloc_asan.o build/host_brk_shim_asan.o \
+    -o build/host_malloc_test_asan
+./build/host_malloc_test_asan
 
 echo "== DNS message test (build/parse, compression, negative cases) =="
 $CC -O2 -Iinclude tests/dns_test.c src/dns.c -o build/host_dns_test
@@ -113,6 +142,51 @@ $CC -O2 -c tests/host_errno_shim.c -o build/host_errno_shim.o
 $CC -O2 tests/time_test.c build/host_time.o build/host_errno_shim.o \
     -o build/host_time_test
 ./build/host_time_test
+
+echo "== pthread stack-size validation (F-r4-rt-1: wrap, 0, SIZE_MAX, min/max) =="
+# src/pthread.c over the tracking allocator and the real-host-thread clone()
+# emulation in tests/host_pthread_shim.c.  Every pthread_* entry point is
+# renamed so the test binary keeps glibc's own pthread implementation, and the
+# allocator is renamed so the shim can assert that clone() received the end of
+# a real PTHREAD_STACK_MIN-or-larger block (a zero-byte stack ends a 16-byte
+# block, or no block at all).  Plain and AddressSanitizer builds.
+PTHREAD_RENAMES="-Dpthread_create=pagh_pthread_create -Dpthread_join=pagh_pthread_join \
+    -Dpthread_exit=pagh_pthread_exit -Dpthread_self=pagh_pthread_self \
+    -Dpthread_attr_init=pagh_pthread_attr_init \
+    -Dpthread_attr_setstacksize=pagh_pthread_attr_setstacksize \
+    -Dpthread_attr_destroy=pagh_pthread_attr_destroy \
+    -Dpthread_mutex_init=pagh_pthread_mutex_init \
+    -Dpthread_mutex_destroy=pagh_pthread_mutex_destroy \
+    -Dpthread_mutex_lock=pagh_pthread_mutex_lock \
+    -Dpthread_mutex_unlock=pagh_pthread_mutex_unlock \
+    -Dpthread_mutex_trylock=pagh_pthread_mutex_trylock \
+    -Dpthread_cond_init=pagh_pthread_cond_init \
+    -Dpthread_cond_destroy=pagh_pthread_cond_destroy \
+    -Dpthread_cond_wait=pagh_pthread_cond_wait \
+    -Dpthread_cond_signal=pagh_pthread_cond_signal \
+    -Dpthread_cond_broadcast=pagh_pthread_cond_broadcast \
+    -Dpthread_rwlock_init=pagh_pthread_rwlock_init \
+    -Dpthread_rwlock_rdlock=pagh_pthread_rwlock_rdlock \
+    -Dpthread_rwlock_wrlock=pagh_pthread_rwlock_wrlock \
+    -Dpthread_rwlock_unlock=pagh_pthread_rwlock_unlock"
+PTHREAD_ALLOC_RENAMES="-Dmalloc=pagh_thread_malloc -Dfree=pagh_thread_free"
+$CC -O2 -Iinclude $PTHREAD_RENAMES $PTHREAD_ALLOC_RENAMES \
+    -c src/pthread.c -o build/host_pthread.o
+$CC -O2 -c tests/host_pthread_shim.c -o build/host_pthread_shim.o
+$CC -O2 -pthread -Iinclude $PTHREAD_RENAMES tests/pthread_test.c \
+    build/host_pthread.o build/host_pthread_shim.o build/host_errno_shim.o \
+    -o build/host_pthread_test
+./build/host_pthread_test
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -Iinclude \
+    $PTHREAD_RENAMES $PTHREAD_ALLOC_RENAMES \
+    -c src/pthread.c -o build/host_pthread_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer \
+    -c tests/host_pthread_shim.c -o build/host_pthread_shim_asan.o
+$CC -O1 -g -fsanitize=address -fno-omit-frame-pointer -pthread \
+    -Iinclude $PTHREAD_RENAMES tests/pthread_test.c \
+    build/host_pthread_asan.o build/host_pthread_shim_asan.o \
+    build/host_errno_shim.o -o build/host_pthread_test_asan
+./build/host_pthread_test_asan
 
 echo "== ld-pagh call-target validation (DT_INIT/DT_INIT_ARRAY/FINI, SHN_ABS) =="
 # src/dynload.c is compiled into the test translation unit so the static
