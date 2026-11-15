@@ -15,6 +15,28 @@ struct thread_start {
 static struct thread_start *registry[MAX_THREADS];
 static pthread_t registry_tid[MAX_THREADS];
 
+#define PAGE_SIZE 4096
+#define PTHREAD_DEFAULT_STACK (64 * 1024)
+
+/* A thread stack is carved out of the process heap, and clone() only checks
+ * that the page at sp-16 is user RW — it cannot tell that the address is
+ * inside live heap blocks.  So the size arithmetic must never wrap:
+ * (SIZE_MAX + 4095) & ~4095 is 0, malloc(0) hands back a 16-byte header block,
+ * and the new thread then pushes its frame through the allocations below it
+ * (round-4 runtime audit F-r4-rt-1).  Reject anything outside the documented
+ * window and do the rounding with an explicit overflow check. */
+static int checked_stack_size(size_t requested, size_t *out) {
+    if (requested < PTHREAD_STACK_MIN || requested > PTHREAD_STACK_MAX)
+        return EINVAL;
+    if (requested > (size_t)-1 - (PAGE_SIZE - 1))
+        return EINVAL;
+    size_t rounded = (requested + (PAGE_SIZE - 1)) & ~(size_t)(PAGE_SIZE - 1);
+    if (rounded == 0 || rounded > PTHREAD_STACK_MAX)
+        return EINVAL;
+    *out = rounded;
+    return 0;
+}
+
 static long futex(int *addr, long op, long val) {
     return __pagh_syscall6(SYS_FUTEX, (long)addr, op | FUTEX_PRIVATE_FLAG, val, 0, 0, 0);
 }
@@ -30,8 +52,12 @@ static void __attribute__((noreturn)) thread_trampoline(unsigned long raw) {
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                    void *(*start_routine)(void *), void *arg) {
-    size_t stack_size = attr && attr->stacksize ? attr->stacksize : (64 * 1024);
-    stack_size = (stack_size + 4095) & ~(size_t)4095;
+    if (!thread || !start_routine) { errno = EINVAL; return -1; }
+    size_t stack_size = PTHREAD_DEFAULT_STACK;
+    if (attr) {
+        int error = checked_stack_size(attr->stacksize, &stack_size);
+        if (error) { errno = error; return -1; }
+    }
     unsigned char *stack = malloc(stack_size);
     struct thread_start *s = malloc(sizeof *s);
     if (!stack || !s) { free(stack); free(s); errno = ENOMEM; return -1; }
@@ -72,12 +98,20 @@ void pthread_exit(void *retval) {
 }
 pthread_t pthread_self(void) { return (pthread_t)__pagh_syscall3(SYS_GETTID, 0, 0, 0); }
 int pthread_attr_init(pthread_attr_t *attr) {
-    if (!attr) return -1;
-    attr->detachstate = 0; attr->stacksize = 64 * 1024; return 0;
+    if (!attr) { errno = EINVAL; return -1; }
+    attr->detachstate = 0; attr->stacksize = PTHREAD_DEFAULT_STACK; return 0;
 }
 int pthread_attr_setstacksize(pthread_attr_t *attr, size_t size) {
-    if (!attr) return -1;
+    if (!attr) { errno = EINVAL; return -1; }
+    /* Record the requested size even when it is out of range and still report
+     * EINVAL: pthread_create revalidates the attribute, so a caller that
+     * ignores this error cannot make the library quietly substitute the
+     * default 64 KiB stack behind its back (the audit's shape: the size comes
+     * from untrusted input and the return value is dropped). */
     attr->stacksize = size;
+    size_t rounded;
+    int error = checked_stack_size(size, &rounded);
+    if (error) { errno = error; return -1; }
     return 0;
 }
 int pthread_attr_destroy(pthread_attr_t *attr) { (void)attr; return 0; }
